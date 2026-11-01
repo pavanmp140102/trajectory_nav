@@ -43,8 +43,9 @@ class PurePursuit:
         lookahead_distance: how far ahead on the path the robot steers to (m).
         velocity: cruise speed (m/s). max_angular_velocity: turn-rate limit (rad/s).
         goal_tolerance: stop when this close to the final point (m).
-        slowdown_distance: start slowing down this far from the goal (m); 0 disables it.
-        min_velocity: lowest speed while slowing down, so the robot still reaches the goal (m/s).
+        slowdown_distance: start slowing down this far from the goal (m); the speed falls
+            linearly to min_velocity at goal_tolerance. 0 (or <= goal_tolerance) disables it.
+        min_velocity: speed on arrival at the goal tolerance, so the robot still gets there (m/s).
         """
         if lookahead_distance <= 0.0:
             raise ValueError('lookahead_distance must be positive')
@@ -115,6 +116,23 @@ class PurePursuit:
         """Return the straight-line distance from the robot to the final path point."""
         return math.hypot(self.path[-1, 0] - x, self.path[-1, 1] - y)
 
+    def remaining_distance(self, x, y):
+        """
+        Return the distance left along the path, measured from the robot's projection onto it.
+
+        Projecting onto the segment after the progress point keeps the value smooth
+        between samples, so the slow-down ramp has no steps.
+        """
+        i = self.progress_index
+        remaining = self.arc_length[-1] - self.arc_length[i]
+        if i + 1 < len(self.path):
+            segment = self.path[i + 1] - self.path[i]
+            length = math.hypot(*segment)
+            if length > 0.0:
+                along = np.dot(np.array([x, y]) - self.path[i], segment) / length
+                remaining -= min(max(along, 0.0), length)
+        return max(remaining, self.distance_to_goal(x, y))
+
     def compute(self, x, y, yaw):
         """
         Return the (linear, angular) velocity command for the robot pose.
@@ -140,11 +158,11 @@ class PurePursuit:
         if abs(alpha) > math.pi / 2.0:
             return 0.0, math.copysign(self.max_angular_velocity, alpha)
 
-        remaining = max(self.arc_length[-1] - self.arc_length[self.progress_index], goal_distance)
         velocity = self.velocity
-        if self.slowdown_distance > 0.0:
-            velocity = max(self.min_velocity,
-                           self.velocity * min(1.0, remaining / self.slowdown_distance))
+        if self.slowdown_distance > self.goal_tolerance:
+            ramp = ((self.remaining_distance(x, y) - self.goal_tolerance)
+                    / (self.slowdown_distance - self.goal_tolerance))
+            velocity = self.min_velocity + (self.velocity - self.min_velocity) * min(1.0, ramp)
 
         omega = 2.0 * velocity * math.sin(alpha) / target_distance
         if abs(omega) > self.max_angular_velocity:

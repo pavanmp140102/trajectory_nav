@@ -20,7 +20,7 @@ from nav_msgs.msg import Path
 import numpy as np
 import rclpy
 from rclpy.duration import Duration
-from rclpy.executors import ExternalShutdownException
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
 
@@ -77,11 +77,16 @@ def run_node(node_class, args=None, on_shutdown=None):
 
     The default SIGINT handler is disabled so the context stays valid while
     `on_shutdown(node)` runs; the controller uses this to send a final stop command.
+    Spinning with a short timeout lets Python handle Ctrl-C promptly even when no
+    message or timer wakes the executor (for example, sim time with no /clock yet).
     """
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = node_class()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            executor.spin_once(timeout_sec=0.1)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:

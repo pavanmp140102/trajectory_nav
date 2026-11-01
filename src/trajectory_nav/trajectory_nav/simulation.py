@@ -46,6 +46,14 @@ def simulate(tracker, x, y, yaw, dt=0.05, max_time=120.0, path_updates=None):
 
 
 def cross_track_error(path, x, y):
-    """Return the distance from each robot position to the nearest point of the path."""
+    """Return the distance from each robot position to the path polyline (not just its samples)."""
     path = np.asarray(path, dtype=float)
-    return np.array([np.min(np.hypot(path[:, 0] - px, path[:, 1] - py)) for px, py in zip(x, y)])
+    start, segment = path[:-1], np.diff(path, axis=0)
+    length_sq = np.maximum(np.sum(segment ** 2, axis=1), 1e-12)
+    errors = []
+    for px, py in zip(x, y):
+        offset = np.array([px, py]) - start
+        t = np.clip(np.sum(offset * segment, axis=1) / length_sq, 0.0, 1.0)
+        closest = start + t[:, None] * segment
+        errors.append(np.min(np.hypot(closest[:, 0] - px, closest[:, 1] - py)))
+    return np.array(errors)

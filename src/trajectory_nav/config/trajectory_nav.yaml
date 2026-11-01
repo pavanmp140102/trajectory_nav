@@ -27,7 +27,7 @@ pure_pursuit_controller:
   ros__parameters:
     lookahead_distance: 0.5   # steer towards the path point this far ahead (m)
     max_angular_velocity: 1.0 # turn-rate limit (rad/s)
-    slowdown_distance: 0.5    # slow down linearly within this distance of the goal (m)
-    min_velocity: 0.05        # lowest speed while slowing down (m/s)
+    slowdown_distance: 0.5    # ramp down to min_velocity over this distance to the goal (m)
+    min_velocity: 0.05        # speed on arrival at goal_tolerance (m/s)
     odom_timeout: 0.5         # stop if odometry is older than this (s)
     control_frequency: 20.0   # control loop rate (Hz)
