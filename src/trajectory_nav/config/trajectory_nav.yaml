@@ -1,0 +1,33 @@
+# Parameters for every trajectory_nav node. See docs/PARAMETERS.md.
+
+# Shared by all nodes, so the values cannot drift apart.
+/**:
+  ros__parameters:
+    frame_id: odom            # frame of the paths and trajectory
+    velocity: 0.3             # cruise speed (m/s): trajectory timing and controller
+    goal_tolerance: 0.2       # goal reached when this close to the last point (m)
+
+waypoint_loader:
+  ros__parameters:
+    num_waypoints: 6          # waypoints per set, the first is the robot position
+    step_min: 1.0             # min forward spacing between waypoints (m)
+    step_max: 2.0             # max forward spacing between waypoints (m)
+    lateral_range: 2.0        # max sideways offset from the robot heading (m)
+    seed: -1                  # random seed, -1 for a different path every run
+
+spline_smoother:
+  ros__parameters:
+    resolution: 0.05          # spacing of the smoothed path samples (m)
+
+trajectory_generator:
+  ros__parameters:
+    sampling_distance: 0.05   # spacing of the trajectory points (m)
+
+pure_pursuit_controller:
+  ros__parameters:
+    lookahead_distance: 0.5   # steer towards the path point this far ahead (m)
+    max_angular_velocity: 1.0 # turn-rate limit (rad/s)
+    slowdown_distance: 0.5    # slow down linearly within this distance of the goal (m)
+    min_velocity: 0.05        # lowest speed while slowing down (m/s)
+    odom_timeout: 0.5         # stop if odometry is older than this (s)
+    control_frequency: 20.0   # control loop rate (Hz)

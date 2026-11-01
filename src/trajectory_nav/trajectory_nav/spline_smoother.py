@@ -1,127 +1,56 @@
-#!/usr/bin/env python3
+# Copyright 2026 Pavan Patil
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import rclpy
-from rclpy.node import Node
-
-import numpy as np
-from scipy.interpolate import CubicSpline
-import matplotlib.pyplot as plt
+"""Spline smoother node: /raw_path waypoints to a smooth, dense /smoothed_path."""
 
 from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped
+from rclpy.node import Node
+
+from trajectory_nav.path_math import smooth_path
+from trajectory_nav.ros_utils import latched_qos, make_path, path_to_xy, run_node
 
 
 class SplineSmoother(Node):
+    """Turn the corner-to-corner waypoint path into a curve the robot can follow."""
 
     def __init__(self):
-        super().__init__("spline_smoother")
-
-        # ---- PARAMETER ----
-        self.declare_parameter("enable_plot", False)
-        self.enable_plot = self.get_parameter("enable_plot").value
-
-        self.subscription = self.create_subscription(
-            Path,
-            "/raw_path",
-            self.path_callback,
-            10
-        )
-
-        self.publisher = self.create_publisher(
-            Path,
-            "/smoothed_path",
-            10
-        )
-
-        self.plotted = False
-
-        self.get_logger().info("Spline Smoother Node Started")
-
+        """Declare parameters and connect /raw_path to the latched /smoothed_path."""
+        super().__init__('spline_smoother')
+        self.frame_id = self.declare_parameter('frame_id', 'odom').value
+        self.resolution = self.declare_parameter('resolution', 0.05).value
+        self.publisher = self.create_publisher(Path, '/smoothed_path', latched_qos())
+        self.create_subscription(Path, '/raw_path', self.path_callback, latched_qos())
+        self.get_logger().info(f'Spline smoother started (resolution={self.resolution} m)')
 
     def path_callback(self, msg):
-
-        if len(msg.poses) < 3:
-            self.get_logger().warn("Not enough waypoints for spline smoothing")
+        """Fit the spline through the waypoints and publish it; bad input is logged and skipped."""
+        x, y = path_to_xy(msg)
+        try:
+            x_smooth, y_smooth = smooth_path(x, y, self.resolution)
+        except ValueError as error:
+            self.get_logger().warn(f'Cannot smooth {len(x)} waypoints: {error}')
             return
-
-        self.get_logger().info(f"Received {len(msg.poses)} waypoints")
-
-        # ---- EXTRACT COORDINATES ----
-        x = np.array([pose.pose.position.x for pose in msg.poses])
-        y = np.array([pose.pose.position.y for pose in msg.poses])
-
-        # ---- ARC LENGTH PARAMETERIZATION ----
-        dx = np.diff(x)
-        dy = np.diff(y)
-
-        distances = np.sqrt(dx**2 + dy**2)
-
-        s = np.concatenate(([0], np.cumsum(distances)))
-
-        # ---- SPLINE FIT ----
-        spline_x = CubicSpline(s, x, bc_type='natural')
-        spline_y = CubicSpline(s, y, bc_type='natural')
-
-        # ---- DENSE SAMPLING ----
-        s_smooth = np.linspace(s.min(), s.max(), 100)
-
-        x_smooth = spline_x(s_smooth)
-        y_smooth = spline_y(s_smooth)
-
-        # ---- PUBLISH SMOOTHED PATH ----
-        smoothed_path = Path()
-        smoothed_path.header.frame_id = "odom"
-
-        for i in range(len(x_smooth)):
-
-            pose = PoseStamped()
-            pose.header.frame_id = "odom"
-
-            pose.pose.position.x = float(x_smooth[i])
-            pose.pose.position.y = float(y_smooth[i])
-            pose.pose.position.z = 0.0
-
-            smoothed_path.poses.append(pose)
-
-        self.publisher.publish(smoothed_path)
-
-        self.get_logger().info("Published smoothed path")
-
-        # ---- OPTIONAL PLOT ----
-        if self.enable_plot and not self.plotted:
-            self.plot_paths(x, y, x_smooth, y_smooth)
-            self.plotted = True
-
-
-    def plot_paths(self, x, y, x_smooth, y_smooth):
-
-        plt.figure()
-
-        plt.plot(x, y, 'ro-', label="Original Waypoints")
-        plt.plot(x_smooth, y_smooth, 'b-', label="Smoothed Path")
-
-        plt.xlabel("X")
-        plt.ylabel("Y")
-
-        plt.title("Arc-Length Cubic Spline Path Smoothing")
-
-        plt.legend()
-        plt.grid(True)
-
-        plt.show()
+        self.publisher.publish(
+            make_path(x_smooth, y_smooth, self.frame_id, self.get_clock().now()))
+        self.get_logger().info(f'Smoothed {len(x)} waypoints into {len(x_smooth)} points')
 
 
 def main(args=None):
-
-    rclpy.init(args=args)
-
-    node = SplineSmoother()
-
-    rclpy.spin(node)
-
-    node.destroy_node()
-    rclpy.shutdown()
+    """Run the spline smoother node."""
+    run_node(SplineSmoother, args)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

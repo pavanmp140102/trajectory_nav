@@ -1,6 +1,0 @@
-# Spline Smoother Parameters
-# Smooths raw waypoints using cubic spline interpolation
-
-spline_smoother:
-  ros__parameters:
-    enable_plot: false        # Enable matplotlib visualization

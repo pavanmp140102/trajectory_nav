@@ -1,85 +1,58 @@
-#!/usr/bin/env python3
+# Copyright 2026 Pavan Patil
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Launch the five trajectory_nav nodes, and optionally RViz, for a robot that provides /odom."""
 
 import os
 
-from launch import LaunchDescription
-from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+NODES = ('waypoint_loader', 'spline_smoother', 'trajectory_generator',
+         'pure_pursuit_controller', 'trajectory_visualizer')
 
 
 def generate_launch_description():
-    """
-    Launch all trajectory navigation nodes.
-    
-    Each node loads its own configuration from the config/ directory:
-    - trajectory_generator.yaml
-    - spline_smoother.yaml
-    - pure_pursuit_controller.yaml
-    
-    To customize behavior, edit the YAML files directly.
-    
-    Usage:
-    $ ros2 launch trajectory_nav trajectory_nav.launch.py
-    """
-    
-    package_dir = get_package_share_directory('trajectory_nav')
-    config_dir = os.path.join(package_dir, 'config')
-    
-    # Individual config files for each node
-    trajectory_gen_params = os.path.join(config_dir, 'trajectory_generator.yaml')
-    spline_smoother_params = os.path.join(config_dir, 'spline_smoother.yaml')
-    pure_pursuit_params = os.path.join(config_dir, 'pure_pursuit_controller.yaml')
+    """Start the pipeline with one shared parameter file; RViz is opt-in with rviz:=true."""
+    share = get_package_share_directory('trajectory_nav')
+    params_file = LaunchConfiguration('params_file')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
-    # Waypoint Loader Node (no parameters)
-    waypoint_loader = Node(
-        package='trajectory_nav',
-        executable='waypoint_loader',
-        name='waypoint_loader',
-        output='screen',
-    )
-
-    # Spline Smoother Node
-    spline_smoother = Node(
-        package='trajectory_nav',
-        executable='spline_smoother',
-        name='spline_smoother',
-        output='screen',
-        parameters=[spline_smoother_params],
-    )
-
-    # Trajectory Generator Node
-    trajectory_generator = Node(
-        package='trajectory_nav',
-        executable='trajectory_generator',
-        name='trajectory_generator',
-        output='screen',
-        parameters=[trajectory_gen_params],
-    )
-
-    # Pure Pursuit Controller Node
-    pure_pursuit_controller = Node(
-        package='trajectory_nav',
-        executable='pure_pursuit_controller',
-        name='pure_pursuit_controller',
-        output='screen',
-        parameters=[pure_pursuit_params],
-    )
-
-    # Trajectory Visualizer Node (optional, no parameters)
-    trajectory_visualizer = Node(
-        package='trajectory_nav',
-        executable='trajectory_visualizer',
-        name='trajectory_visualizer',
-        output='screen',
-    )
-
-    # Create launch description
-    ld = LaunchDescription([
-        waypoint_loader,
-        spline_smoother,
-        trajectory_generator,
-        pure_pursuit_controller,
-        trajectory_visualizer,
-    ])
-
-    return ld
+    arguments = [
+        DeclareLaunchArgument('params_file',
+                              default_value=os.path.join(share, 'config', 'trajectory_nav.yaml'),
+                              description='Parameter file for all nodes'),
+        DeclareLaunchArgument('use_sim_time', default_value='false',
+                              description='Use /clock from a simulator'),
+        DeclareLaunchArgument('rviz', default_value='false', description='Start RViz'),
+        DeclareLaunchArgument('stamped_cmd_vel', default_value='true',
+                              description='Publish TwistStamped on /cmd_vel (false: Twist)'),
+    ]
+    overrides = {'pure_pursuit_controller': {
+                 'stamped_cmd_vel': LaunchConfiguration('stamped_cmd_vel')}}
+    nodes = [
+        Node(package='trajectory_nav', executable=name, name=name, output='screen',
+             parameters=[params_file, {'use_sim_time': use_sim_time}, overrides.get(name, {})])
+        for name in NODES
+    ]
+    rviz = Node(package='rviz2', executable='rviz2', name='rviz2', output='screen',
+                arguments=['-d', os.path.join(share, 'rviz', 'trajectory_nav.rviz')],
+                parameters=[{'use_sim_time': use_sim_time}],
+                condition=IfCondition(LaunchConfiguration('rviz')))
+    return LaunchDescription(arguments + nodes + [rviz])

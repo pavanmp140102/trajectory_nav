@@ -2,14 +2,32 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>trajectory_nav</name>
-  <version>0.0.0</version>
-  <description>Trajectory navigation package with waypoint loading and spline smoothing</description>
-  <maintainer email="pavanmp1402@gmail.com">hppmp</maintainer>
+  <version>0.1.0</version>
+  <description>
+    Waypoint-to-velocity pipeline for a differential-drive robot: random waypoints,
+    arc-length cubic spline smoothing, fixed-spacing time-parameterised trajectory,
+    pure pursuit tracking, and RViz visualisation.
+  </description>
+  <maintainer email="pavanmp1402@gmail.com">Pavan Patil</maintainer>
   <license>Apache-2.0</license>
 
-  <depend>rclpy</depend>
-  <depend>nav_msgs</depend>
-  <depend>geometry_msgs</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <!-- demo.launch.py only -->
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>turtlebot3_description</exec_depend>
+  <exec_depend>turtlebot3_fake_node</exec_depend>
+  <exec_depend>xacro</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

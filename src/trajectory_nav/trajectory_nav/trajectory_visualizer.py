@@ -1,212 +1,93 @@
-#!/usr/bin/env python3
+# Copyright 2026 Pavan Patil
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import rclpy
-from rclpy.node import Node
+"""Trajectory visualizer node: RViz markers for the raw, smoothed and trajectory paths."""
 
-import numpy as np
-import math
-from nav_msgs.msg import Path
-from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
+from nav_msgs.msg import Path
+from rclpy.node import Node
+from std_msgs.msg import ColorRGBA
+from trajectory_nav.ros_utils import latched_qos, run_node
+from visualization_msgs.msg import Marker, MarkerArray
+
+# namespace: (marker type, size in m, (r, g, b, a), keep every n-th point)
+STYLES = {
+    'raw_waypoints': (Marker.SPHERE_LIST, 0.2, (0.9, 0.2, 0.2, 1.0), 1),
+    'raw_path_line': (Marker.LINE_STRIP, 0.03, (0.9, 0.2, 0.2, 0.6), 1),
+    'smoothed_path': (Marker.LINE_STRIP, 0.035, (0.2, 0.4, 1.0, 0.9), 1),
+    'trajectory_points': (Marker.SPHERE_LIST, 0.11, (0.1, 0.8, 0.3, 1.0), 5),
+}
+TOPICS = {
+    '/raw_path': ('raw_waypoints', 'raw_path_line'),
+    '/smoothed_path': ('smoothed_path',),
+    '/trajectory': ('trajectory_points',),
+}
 
 
 class TrajectoryVisualizer(Node):
+    """Show each pipeline stage in RViz so the smoothing and sampling can be checked by eye."""
 
     def __init__(self):
-        super().__init__("trajectory_visualizer")
+        """Subscribe to the three path topics and set up the latched marker output."""
+        super().__init__('trajectory_visualizer')
+        self.markers = {}
+        self.publisher = self.create_publisher(MarkerArray, '/trajectory_markers', latched_qos())
+        for topic, namespaces in TOPICS.items():
+            self.create_subscription(
+                Path, topic,
+                lambda msg, namespaces=namespaces: self.path_callback(msg, namespaces),
+                latched_qos())
+        self.get_logger().info('Trajectory visualizer started')
 
-        # ---- SUBSCRIPTIONS ----
-        self.raw_path_subscription = self.create_subscription(
-            Path,
-            "/raw_path",
-            self.raw_path_callback,
-            10
-        )
+    def path_callback(self, msg, namespaces):
+        """Rebuild the markers for one path and republish all of them, so every stage stays."""
+        for namespace in namespaces:
+            self.markers[namespace] = self.make_marker(msg, namespace)
+        self.publisher.publish(MarkerArray(markers=list(self.markers.values())))
 
-        self.smoothed_path_subscription = self.create_subscription(
-            Path,
-            "/smoothed_path",
-            self.smoothed_path_callback,
-            10
-        )
+    def make_marker(self, msg, namespace):
+        """
+        Build one marker holding all points of a path in the style for `namespace`.
 
-        self.trajectory_subscription = self.create_subscription(
-            Path,
-            "/trajectory",
-            self.trajectory_callback,
-            10
-        )
-
-        # ---- PUBLISHERS ----
-        self.marker_publisher = self.create_publisher(
-            MarkerArray,
-            "/trajectory_markers",
-            10
-        )
-
-        self.get_logger().info("Trajectory Visualizer Started")
-
-
-    def raw_path_callback(self, msg):
-        """Publish raw waypoints as red spheres"""
-        markers = MarkerArray()
-
-        # Clear previous markers
-        clear_marker = Marker()
-        clear_marker.action = Marker.DELETEALL
-
-        for i, pose in enumerate(msg.poses):
-            marker = Marker()
-            marker.header.frame_id = "odom"
-            marker.header.stamp.sec = 0
-            marker.header.stamp.nanosec = 0
-            marker.ns = "raw_waypoints"
-            marker.id = i
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-
-            marker.pose.position = pose.pose.position
-            marker.scale.x = 0.1
-            marker.scale.y = 0.1
-            marker.scale.z = 0.1
-
-            marker.color.r = 1.0  # Red
-            marker.color.g = 0.0
-            marker.color.b = 0.0
-            marker.color.a = 1.0
-
-            markers.markers.append(marker)
-
-        # Line connecting waypoints
-        line_marker = Marker()
-        line_marker.header.frame_id = "odom"
-        line_marker.header.stamp.sec = 0
-        line_marker.header.stamp.nanosec = 0
-        line_marker.ns = "raw_path_line"
-        line_marker.id = 0
-        line_marker.type = Marker.LINE_STRIP
-        line_marker.action = Marker.ADD
-
-        for pose in msg.poses:
-            point = Point()
-            point.x = pose.pose.position.x
-            point.y = pose.pose.position.y
-            point.z = pose.pose.position.z
-            line_marker.points.append(point)
-
-        line_marker.scale.x = 0.05
-        line_marker.color.r = 1.0
-        line_marker.color.g = 0.0
-        line_marker.color.b = 0.0
-        line_marker.color.a = 0.5
-
-        markers.markers.append(line_marker)
-
-        self.marker_publisher.publish(markers)
-
-
-    def smoothed_path_callback(self, msg):
-        """Publish smoothed path as blue line"""
-        markers = MarkerArray()
-
-        line_marker = Marker()
-        line_marker.header.frame_id = "odom"
-        line_marker.header.stamp.sec = 0
-        line_marker.header.stamp.nanosec = 0
-        line_marker.ns = "smoothed_path"
-        line_marker.id = 0
-        line_marker.type = Marker.LINE_STRIP
-        line_marker.action = Marker.ADD
-
-        for pose in msg.poses:
-            point = Point()
-            point.x = pose.pose.position.x
-            point.y = pose.pose.position.y
-            point.z = pose.pose.position.z
-            line_marker.points.append(point)
-
-        line_marker.scale.x = 0.03
-        line_marker.color.r = 0.0
-        line_marker.color.g = 0.0
-        line_marker.color.b = 1.0  # Blue
-        line_marker.color.a = 0.8
-
-        markers.markers.append(line_marker)
-
-        self.marker_publisher.publish(markers)
-
-
-    def trajectory_callback(self, msg):
-        """Publish trajectory as green spheres (sampled points)"""
-        markers = MarkerArray()
-
-        # Sample every 5th point to avoid too many markers
-        sample_rate = max(1, len(msg.poses) // 20)
-
-        for idx, pose in enumerate(msg.poses):
-            if idx % sample_rate != 0:
-                continue
-
-            marker = Marker()
-            marker.header.frame_id = "odom"
-            marker.header.stamp.sec = 0
-            marker.header.stamp.nanosec = 0
-            marker.ns = "trajectory_points"
-            marker.id = idx
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-
-            marker.pose.position = pose.pose.position
-            marker.scale.x = 0.08
-            marker.scale.y = 0.08
-            marker.scale.z = 0.08
-
-            marker.color.r = 0.0
-            marker.color.g = 1.0  # Green
-            marker.color.b = 0.0
-            marker.color.a = 0.7
-
-            markers.markers.append(marker)
-
-        # Line connecting trajectory points
-        line_marker = Marker()
-        line_marker.header.frame_id = "odom"
-        line_marker.header.stamp.sec = 0
-        line_marker.header.stamp.nanosec = 0
-        line_marker.ns = "trajectory_line"
-        line_marker.id = 0
-        line_marker.type = Marker.LINE_STRIP
-        line_marker.action = Marker.ADD
-
-        for pose in msg.poses:
-            point = Point()
-            point.x = pose.pose.position.x
-            point.y = pose.pose.position.y
-            point.z = pose.pose.position.z
-            line_marker.points.append(point)
-
-        line_marker.scale.x = 0.02
-        line_marker.color.r = 0.0
-        line_marker.color.g = 1.0
-        line_marker.color.b = 0.0
-        line_marker.color.a = 0.6
-
-        markers.markers.append(line_marker)
-
-        self.marker_publisher.publish(markers)
+        A single SPHERE_LIST or LINE_STRIP per namespace, always with id 0, replaces
+        the previous one in RViz, so no stale markers are left behind.
+        """
+        marker_type, size, (r, g, b, a), step = STYLES[namespace]
+        marker = Marker()
+        marker.header.frame_id = msg.header.frame_id
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = namespace
+        marker.id = 0
+        marker.type = marker_type
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = size
+        marker.scale.y = size
+        marker.scale.z = size
+        marker.color = ColorRGBA(r=r, g=g, b=b, a=a)
+        poses = msg.poses[::step]
+        if step > 1 and msg.poses and poses[-1] is not msg.poses[-1]:
+            poses.append(msg.poses[-1])
+        marker.points = [Point(x=p.pose.position.x, y=p.pose.position.y, z=0.0) for p in poses]
+        return marker
 
 
 def main(args=None):
-
-    rclpy.init(args=args)
-
-    node = TrajectoryVisualizer()
-
-    rclpy.spin(node)
-
-    node.destroy_node()
-    rclpy.shutdown()
+    """Run the trajectory visualizer node."""
+    run_node(TrajectoryVisualizer, args)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
