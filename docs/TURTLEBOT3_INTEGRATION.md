@@ -43,7 +43,7 @@ ros2 launch trajectory_nav trajectory_nav.launch.py use_sim_time:=true rviz:=tru
 
 Use `empty_world`. The random waypoints know nothing about obstacles, so in `turtlebot3_world` the robot will drive into the pillars. The default `stamped_cmd_vel:=true` matches the Jazzy Gazebo bridge, which converts `geometry_msgs/TwistStamped` on `/cmd_vel`.
 
-This setup was checked on 2026-11-01 with the burger model: the robot reached consecutive goals 0.20 m from the end of each path.
+This setup was last checked on 2026-11-02 with the burger model: the robot reached consecutive goals 0.20 m from the end of each path.
 
 **If the simulator hangs** with the spawner printing `Requesting list of world names` forever, Gazebo's network discovery is failing on your network interface. Pin it to loopback in both terminals:
 
