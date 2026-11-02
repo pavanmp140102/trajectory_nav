@@ -1,136 +1,101 @@
-#!/usr/bin/env python3
+# Copyright 2026 Pavan Patil
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import rclpy
-from rclpy.node import Node
+"""Waypoint loader node: publishes random waypoints ahead of the robot on /raw_path."""
 
-import random
+import math
+
+from nav_msgs.msg import Odometry, Path
 import numpy as np
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from std_msgs.msg import Empty
 
-from nav_msgs.msg import Path, Odometry
-from geometry_msgs.msg import PoseStamped
+from trajectory_nav.path_math import generate_waypoints, require_positive, yaw_from_quaternion
+from trajectory_nav.ros_utils import declare_read_only, event_qos, latched_qos, make_path, \
+    run_node
 
 
 class WaypointLoader(Node):
+    """Generate a new set of waypoints from the robot pose each time the controller ends a path."""
 
     def __init__(self):
-        super().__init__("waypoint_loader")
+        """Declare and check parameters, and set up /odom, /goal_reached and latched /raw_path."""
+        super().__init__('waypoint_loader')
+        self.frame_id = declare_read_only(self, 'frame_id', 'odom')
+        self.num_waypoints = declare_read_only(self, 'num_waypoints', 6)
+        self.step_min = require_positive('step_min', declare_read_only(self, 'step_min', 1.0))
+        self.step_max = require_positive('step_max', declare_read_only(self, 'step_max', 2.0))
+        self.lateral_range = declare_read_only(self, 'lateral_range', 2.0)
+        seed = declare_read_only(self, 'seed', -1)
+        if self.num_waypoints < 3:
+            raise ValueError('num_waypoints must be at least 3 for the spline smoother')
+        if self.step_min > self.step_max:
+            raise ValueError('step_min must not be larger than step_max')
+        if not (math.isfinite(self.lateral_range) and self.lateral_range >= 0.0):
+            raise ValueError('lateral_range must be a number that is not negative')
+        self.rng = np.random.default_rng(None if seed < 0 else seed)
 
-        self.publisher = self.create_publisher(
-            Path,
-            "/raw_path",
-            10
-        )
-
-        # Subscribe to odometry to track robot position
-        self.odom_subscription = self.create_subscription(
-            Odometry,
-            "/odom",
-            self.odom_callback,
-            10
-        )
-
-        # Track state
-        self.current_waypoints = None
-        self.robot_position = None
-        self.goal_reached_distance = 0.3  # Distance to consider goal reached (m)
-
-        self.get_logger().info("Waypoint Loader Started")
-
-        # Generate first waypoints immediately
-        self.generate_and_publish_waypoints()
-
-        # Then check periodically (10 Hz) if goal is reached
-        self.timer = self.create_timer(0.1, self.check_and_publish)
-
+        self.waypoints = None
+        self.robot_pose = None
+        self.publisher = self.create_publisher(Path, '/raw_path', latched_qos())
+        self.create_subscription(Odometry, '/odom', self.odom_callback, qos_profile_sensor_data)
+        self.create_subscription(Empty, '/goal_reached', self.goal_callback, event_qos())
+        self.get_logger().info('Waypoint loader started, waiting for /odom')
 
     def odom_callback(self, msg):
-        """Track robot position from odometry"""
-        self.robot_position = np.array([
-            msg.pose.pose.position.x,
-            msg.pose.pose.position.y
-        ])
-
-
-    def generate_random_waypoints(self):
-        """Generate new random waypoints starting from origin"""
-        waypoints = []
-        x = 0.0
-        for i in range(6):
-            y = random.uniform(-2.0, 2.0)
-            waypoints.append((x, y))
-            x += random.uniform(1.0, 2.0)
-        return waypoints
-
-
-    def generate_and_publish_waypoints(self):
-        """Generate new waypoints and publish them"""
-        self.current_waypoints = self.generate_random_waypoints()
-        self.get_logger().info(f"Generated NEW waypoints: {self.current_waypoints}")
-        
-        path_msg = Path()
-        path_msg.header.frame_id = "odom"
-
-        for x, y in self.current_waypoints:
-            pose = PoseStamped()
-            pose.header.frame_id = "odom"
-            pose.pose.position.x = float(x)
-            pose.pose.position.y = float(y)
-            pose.pose.position.z = 0.0
-            path_msg.poses.append(pose)
-
-        self.publisher.publish(path_msg)
-        self.get_logger().info(f"Published waypoint path ({len(self.current_waypoints)} points)")
-
-
-    def check_and_publish(self):
-        """Check if robot reached goal, generate new waypoints if so"""
-        
-        # Don't check until we have both waypoints and robot position
-        if self.current_waypoints is None or self.robot_position is None:
+        """Keep the latest valid pose, and publish the first waypoint set once one is known."""
+        if not self.pose_is_finite(msg.pose.pose):
+            self.get_logger().warn('Ignoring odometry that is not finite',
+                                   throttle_duration_sec=5.0)
             return
-        
-        # Get the final goal (last waypoint)
-        goal_x, goal_y = self.current_waypoints[-1]
-        goal_position = np.array([goal_x, goal_y])
-        
-        # Calculate distance to goal
-        distance_to_goal = np.linalg.norm(self.robot_position - goal_position)
-        
-        # If close enough to goal, generate new waypoints
-        if distance_to_goal < self.goal_reached_distance:
-            self.get_logger().info(
-                f"Goal REACHED! (distance: {distance_to_goal:.3f}m). "
-                f"Robot at ({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f})"
-            )
-            self.generate_and_publish_waypoints()
-        else:
-            # Keep republishing current waypoints (for latecomer subscribers)
-            if self.current_waypoints is not None:
-                path_msg = Path()
-                path_msg.header.frame_id = "odom"
+        self.robot_pose = msg.pose.pose
+        if self.waypoints is None:
+            self.publish_waypoints()
 
-                for x, y in self.current_waypoints:
-                    pose = PoseStamped()
-                    pose.header.frame_id = "odom"
-                    pose.pose.position.x = float(x)
-                    pose.pose.position.y = float(y)
-                    pose.pose.position.z = 0.0
-                    path_msg.poses.append(pose)
+    @staticmethod
+    def pose_is_finite(pose):
+        """Return True if the pose's position and orientation are all finite numbers."""
+        values = (pose.position.x, pose.position.y, pose.orientation.x, pose.orientation.y,
+                  pose.orientation.z, pose.orientation.w)
+        return all(math.isfinite(value) for value in values)
 
-                self.publisher.publish(path_msg)
+    def goal_callback(self, msg):
+        """Publish the next waypoint set when the controller reports that it reached the goal."""
+        if self.robot_pose is None:
+            return
+        self.get_logger().info('Goal reached, generating new waypoints')
+        self.publish_waypoints()
+
+    def publish_waypoints(self):
+        """Generate waypoints from the robot pose and publish them once on latched /raw_path."""
+        position, q = self.robot_pose.position, self.robot_pose.orientation
+        self.waypoints = generate_waypoints(
+            position.x, position.y, yaw_from_quaternion(q.x, q.y, q.z, q.w),
+            count=self.num_waypoints, step_range=(self.step_min, self.step_max),
+            lateral_range=self.lateral_range, rng=self.rng)
+        self.publisher.publish(make_path(self.waypoints[:, 0], self.waypoints[:, 1],
+                                         self.frame_id, self.get_clock().now()))
+        points = ', '.join(f'({px:.2f}, {py:.2f})' for px, py in self.waypoints)
+        self.get_logger().info(f'Published {len(self.waypoints)} waypoints: {points}')
 
 
 def main(args=None):
-
-    rclpy.init(args=args)
-
-    node = WaypointLoader()
-
-    rclpy.spin(node)
-
-    node.destroy_node()
-    rclpy.shutdown()
+    """Run the waypoint loader node."""
+    run_node(WaypointLoader, args)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

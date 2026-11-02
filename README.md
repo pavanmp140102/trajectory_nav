@@ -1,471 +1,146 @@
-# Trajectory Navigation - ROS2 Jazzy
+# trajectory_nav
 
-A modular ROS2 package for smooth trajectory generation from waypoints and pure pursuit control for differential drive robots.
+A ROS 2 Jazzy package that turns a handful of waypoints into a smooth, timed trajectory and drives a differential-drive robot along it with pure pursuit.
 
-## Quick Start 
+![RViz: the robot has reached four goals in a row. Red dots are waypoints, the blue line is the smoothed path with green trajectory samples, and the orange line is the robot's trail.](docs/images/rviz_multi_goal.png)
 
-### Complete Setup in 5 Steps
+*The demo after about two minutes. Red: raw waypoints. Blue: smoothed path. Green: trajectory samples. Orange: where the robot actually drove. Each new set of waypoints starts where the robot finished the last one.*
 
-**Step 1: Clone the Repository**
-```bash
-cd ~/Workspace
-git clone https://github.com/pavanmp140102/trajectory-smoothing-ros2.git nav_assignment_ws
-cd nav_assignment_ws
+## What it does
+
+```mermaid
+flowchart LR
+    odom(["/odom"]) --> WL
+    WL[waypoint_loader] -- "/raw_path" --> SS[spline_smoother]
+    SS -- "/smoothed_path" --> TG[trajectory_generator]
+    TG -- "/trajectory" --> PP[pure_pursuit_controller]
+    odom --> PP
+    PP -- "/cmd_vel" --> robot(["robot base"])
+    PP -. "/goal_reached" .-> WL
+    WL -. "/raw_path" .-> TV[trajectory_visualizer]
+    SS -. "/smoothed_path" .-> TV
+    TG -. "/trajectory" .-> TV
+    TV -- "/trajectory_markers" --> rviz(["RViz"])
 ```
 
-**Step 2: Install Dependencies**
-```bash
-# Install system dependencies
-sudo apt-get update
-sudo apt-get install -y python3-colcon-common-extensions
+1. **`waypoint_loader`** makes six random waypoints ahead of the robot, starting at its current pose. When the controller reports that the robot reached the last one, it makes a new set.
+2. **`spline_smoother`** fits a natural cubic spline through the waypoints, using arc length as the parameter, and samples it every 5 cm.
+3. **`trajectory_generator`** resamples that curve at exactly `sampling_distance` steps and stamps each pose with the time the robot should get there at constant speed.
+4. **`pure_pursuit_controller`** steers towards a point 0.5 m ahead on the trajectory and publishes velocity commands. It slows down for the goal and stops within 0.2 m of it.
+5. **`trajectory_visualizer`** draws every stage as RViz markers.
 
-# Install Python dependencies
-pip install numpy scipy matplotlib tf-transformations
-```
+The paths are published once, when they change, on latched topics, so a node that starts late still gets the latest path.
 
-**Step 3: Build the Package**
-```bash
-cd ~/Workspace/nav_assignment_ws
-colcon build --packages-select trajectory_nav
-```
+## Quick start
 
-**Step 4: Source the Installation**
-```bash
-source /opt/ros/jazzy/setup.bash
-source ~/Workspace/nav_assignment_ws/install/setup.bash
-```
-> *Tip: Add these lines to `~/.bashrc` to auto-source on every terminal*
-
-**Step 5: Run the System**
-```bash
-ros2 launch trajectory_nav trajectory_nav.launch.py
-```
-
-That's it! The system generates random waypoints, smooths them, creates a trajectory, and tracks it.
-
----
-
-### Script-Based Setup (Automated)
+You need ROS 2 Jazzy on Ubuntu 24.04.
 
 ```bash
-cd ~/Workspace/nav_assignment_ws
-bash QUICKSTART.sh
+# in a colcon workspace
+cd ~/ros2_ws/src
+git clone git@github.com:pavanmp140102/trajectory_nav.git
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -y
+# on a robot with no display, skip the demo-only packages:
+#   rosdep install --from-paths src --ignore-src -y \
+#     --skip-keys "rviz2 turtlebot3_fake_node turtlebot3_description xacro robot_state_publisher"
+colcon build --symlink-install
+source install/setup.bash
 ```
 
-This will automatically source, build, and show all available commands.
+**Run the demo.** No simulator is needed: TurtleBot3's kinematic fake node stands in for the robot, and RViz opens with the view above.
 
----
-
-## What Is This?
-
-This project implements a **complete trajectory tracking pipeline** for autonomous navigation:
-
-1. **Waypoint Generation** → Raw sparse waypoints
-2. **Path Smoothing** → Continuous smooth paths (Cubic Spline)
-3. **Trajectory Generation** → Time-parameterized trajectory
-4. **Pure Pursuit Control** → Smooth trajectory tracking
-5. **Visualization** → RViz markers for debugging
-
-Perfect for robotics education, simulation testing, and as a starting point for real robot deployment.
-
----
-
-## Architecture at a Glance
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│             Trajectory Navigation Pipeline                  │
-└─────────────────────────────────────────────────────────────┘
-
-Waypoints → Smoother → Generator → Controller → /cmd_vel → Robot
-                                       ↑
-                                    /odom (feedback)
+```bash
+ros2 launch trajectory_nav demo.launch.py
 ```
 
-- **5 nodes** working in concert via ROS topics
-- **Loosely coupled**: Easy to replace any component
-- **Modular design**: Run nodes individually or together
-- **Well-tested**: Unit tests included and passing
+**Run in Gazebo** with a simulated TurtleBot3 (two terminals):
 
----
+```bash
+# terminal 1
+export TURTLEBOT3_MODEL=burger
+ros2 launch turtlebot3_gazebo empty_world.launch.py
 
-## Features
+# terminal 2
+ros2 launch trajectory_nav trajectory_nav.launch.py use_sim_time:=true rviz:=true
+```
 
-✅ **Cubic Spline Smoothing** - Arc-length parameterized for even spacing  
-✅ **Time Parameterization** - Converts path to trajectory with velocity  
-✅ **Pure Pursuit Control** - Proven algorithm for trajectory tracking  
-✅ **Real-time Feedback** - Closed-loop control via odometry  
-✅ **Rich Visualization** - RViz-ready markers for all stages  
-✅ **Fully Configurable** - Tune all parameters via ROS  
-✅ **ROS2 Jazzy Ready** - Latest ROS2 distribution  
-✅ **Well Documented** - Complete docs with examples  
+See [docs/TURTLEBOT3_INTEGRATION.md](docs/TURTLEBOT3_INTEGRATION.md) for real robots and troubleshooting.
 
----
+## Results
+
+| | |
+|---|---|
+| ![Close-up of the TurtleBot3 burger following the smoothed path](docs/images/rviz_closeup.png) | ![The second waypoint set starts exactly where the robot finished the first path](docs/images/rviz_second_path.png) |
+| *Close-up: the robot (grey) on the blue path, with its trail in orange.* | *The second path starts where the first one ended.* |
+
+In a kinematic simulation of the example path, the robot stays within 6 cm of the path once it has lined up. The largest error is 17.6 cm, at the very start, because the robot faces +x while the path leaves at about −45°. The mean error is 3.3 cm. In the fake-node demo, each goal is reached 0.20 m from the final point, which is the goal tolerance.
+
+![Cross-track error and speed along the example path](docs/images/closed_loop.png)
+
+## Topics
+
+| Topic | Type | Direction | QoS |
+|---|---|---|---|
+| `/odom` | `nav_msgs/Odometry` | in | sensor data (best effort); also accepts reliable publishers |
+| `/raw_path` | `nav_msgs/Path` | waypoint_loader → | reliable, transient local, depth 1 |
+| `/smoothed_path` | `nav_msgs/Path` | spline_smoother → | reliable, transient local, depth 1 |
+| `/trajectory` | `nav_msgs/Path` | trajectory_generator → | reliable, transient local, depth 1 |
+| `/cmd_vel` | `geometry_msgs/TwistStamped` (or `Twist`) | → robot | default |
+| `/goal_reached` | `std_msgs/Empty` | controller → waypoint_loader | reliable, volatile, depth 1 |
+| `/trajectory_markers` | `visualization_msgs/MarkerArray` | → RViz | reliable, transient local, depth 1 |
+
+Each pose on `/trajectory` has its own `header.stamp`: the time the robot is planned to reach it. Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Configuration
+
+All parameters live in one file, [`config/trajectory_nav.yaml`](src/trajectory_nav/config/trajectory_nav.yaml). The ones you will most likely change:
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `velocity` | 0.3 m/s | Cruise speed. Shared by the trajectory timing and the controller. |
+| `lookahead_distance` | 0.5 m | Smaller tracks tighter but can oscillate; larger is smoother but cuts corners. |
+| `sampling_distance` | 0.05 m | Spacing of trajectory points. |
+| `seed` | -1 | Fix it (for example `3`) to get the same paths on every run. |
+
+The controller's tuning can be changed while it runs:
+
+```bash
+ros2 param set /pure_pursuit_controller lookahead_distance 0.7
+```
+
+The full list is in [docs/PARAMETERS.md](docs/PARAMETERS.md).
 
 ## Documentation
 
-Start here based on your needs:
-
-### 🚀 Getting Started
-- **[Quick Start Guide](docs/QUICKSTART.md)** - 5 minutes to running
-- **[Installation & Running](docs/QUICKSTART.md#installation)** - Step-by-step setup
-
-### 🏗️ Understanding the System
-- **[Architecture Overview](docs/ARCHITECTURE.md)** - How components connect
-- **[Data Flow Diagram](docs/ARCHITECTURE.md#data-flow-pipeline)** - Topic connections
-- **[Node Details](docs/ARCHITECTURE.md#node-details)** - What each node does
-
-### 🧠 Algorithms & Theory
-- **[Algorithms Guide](docs/ALGORITHMS.md)** - How spline smoothing works
-- **[Pure Pursuit Control Law](docs/ALGORITHMS.md#pure-pursuit-control-law)** - Control algorithm explained
-- **[Mathematical Notation](docs/ALGORITHMS.md#mathematical-notation)** - Formal definitions
-
-### ⚙️ Configuration & Tuning
-- **[Configuration Guide (Simple)](docs/CONFIG_SIMPLE.md)** - Edit YAML files to tune (START HERE!)
-- **[Parameters Reference](docs/PARAMETERS.md)** - Detailed parameter documentation
-- **[Manual Tuning Workflow](docs/CONFIG_SIMPLE.md#manual-tuning-workflow)** - Step-by-step tuning guide
-
-### 🤖 Turtlebot3 Integration
-- **[Turtlebot3 Setup](docs/TURTLEBOT3_INTEGRATION.md)** - Run with physical/simulated robot
-- **[Unified Launch File](docs/TURTLEBOT3_INTEGRATION.md#create-unified-launch-file)** - Single-command startup
-- **[Real Robot Deployment](docs/TURTLEBOT3_INTEGRATION.md#real-robot-deployment)** - Production setup
-
----
-
-## Quick Examples
-
-### Example 1: Default Setup
-```bash
-ros2 launch trajectory_nav trajectory_nav.launch.py
-```
-Runs with default parameters. Robot tracks a randomly generated trajectory.
-
-### Example 2: Slow Smooth Tracking
-```bash
-ros2 run trajectory_nav pure_pursuit_controller \
-  --ros-args -p lookahead_distance:=1.0 -p linear_velocity:=0.2
-```
-Larger lookahead for smoother, more stable tracking.
-
-### Example 3: Dense Sampling
-```bash
-ros2 run trajectory_nav trajectory_generator \
-  --ros-args -p sampling_distance:=0.02 -p velocity:=0.3
-```
-Finer trajectory resolution for tighter control.
-
-### Example 4: With Turtlebot3
-```bash
-# Terminal 1: Simulator
-export TURTLEBOT3_MODEL=waffle
-ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
-
-# Terminal 2: Navigation
-ros2 launch trajectory_nav trajectory_nav.launch.py
-
-# Terminal 3: Visualization
-rviz2
-```
-Full end-to-end trajectory tracking with simulated robot.
-
----
-
-## Topics & Messages
-
-### Input
-- `/raw_path` (nav_msgs/Path) - Raw waypoints
-- `/odom` (nav_msgs/Odometry) - Robot odometry for feedback
-
-### Processing
-- `/smoothed_path` (nav_msgs/Path) - Smoothed continuous path
-- `/trajectory` (nav_msgs/Path) - Time-parameterized trajectory
-
-### Output
-- `/cmd_vel` (geometry_msgs/Twist) - Velocity commands to robot
-
-### Visualization
-- `/trajectory_markers` (visualization_msgs/MarkerArray) - Debug visualization
-
----
-
-## Parameters
-
-### Key Parameters to Tune
-
-```python
-# Trajectory Generator
-sampling_distance: 0.05        # Distance between trajectory points (m)
-velocity: 0.3                  # Constant velocity along path (m/s)
-
-# Pure Pursuit Controller (most important!)
-lookahead_distance: 0.5        # ⭐ Main tuning parameter (m)
-linear_velocity: 0.3           # Forward speed (m/s)
-max_angular_velocity: 1.0      # Max turn rate (rad/s)
-
-# Spline Smoother
-enable_plot: false             # Visualization (disable in production)
-```
-
-**Quick Tuning Rule:**
-- Robot oscillates? → **Increase** `lookahead_distance`
-- Robot misses turns? → **Decrease** `lookahead_distance`
-- Too slow? → **Increase** `linear_velocity`
-- Too jerky? → **Decrease** `sampling_distance`
-
-See [Configuration Guide](docs/CONFIG_SIMPLE.md) for step-by-step tuning workflow.
-
----
-
-## Components
-
-### 1. Waypoint Loader
-Generates or loads waypoints, publishes raw path.
-
-### 2. Spline Smoother
-Applies cubic spline interpolation to create smooth continuous curves.
-
-### 3. Trajectory Generator
-Resamples smooth path at fixed intervals, adds timestamps.
-
-### 4. Pure Pursuit Controller
-Implements pure pursuit control law, generates velocity commands.
-
-### 5. Trajectory Visualizer
-Publishes RViz markers for visualization at all pipeline stages.
-
-See [Architecture](docs/ARCHITECTURE.md) for detailed component descriptions.
-
----
-
-## Control Algorithm
-
-### Pure Pursuit Control Law
-
-The system uses the proven **Pure Pursuit** algorithm:
-
-$$\alpha = \arctan\left(\frac{y_{target} - y_{robot}}{x_{target} - x_{robot}}\right) - \theta_{robot}$$
-
-$$\omega = \frac{2v \sin(\alpha)}{L}$$
-
-Where:
-- $\alpha$ = angle error to lookahead point
-- $v$ = linear velocity
-- $L$ = lookahead distance (tunable)
-- $\omega$ = angular velocity command
-
-**Behavior:**
-- Straight line → no steering (α ≈ 0)
-- Sharp turn → proportional steering (|α| large)
-- Stable convergence to path
-
-See [Algorithms Guide](docs/ALGORITHMS.md) for math details.
-
----
-
-## System Performance
-
-### Simulation Results
-- **Tracking Error**: < 0.2 m
-- **Control Frequency**: 10 Hz
-- **CPU Usage**: < 5%
-- **Memory**: < 50 MB
-
-### Typical Trajectories
-
-| Scenario | Duration | Points | Error |
-|----------|----------|--------|-------|
-| Straight line (5m) | 17s | 100 | <0.1m |
-| Curves 4-point (10m) | 35s | 200 | <0.2m |
-| Complex path (20m) | 70s | 400 | <0.3m |
-
----
-
-## Testing
-
-### Run Unit Tests
-```bash
-cd ~/Workspace/nav_assignment_ws/src/trajectory_nav
-python3 test_components.py
-```
-
-All tests should pass ✓
-
-### Monitor Execution
-```bash
-# Watch trajectory being tracked
-ros2 topic echo /trajectory
-
-# Watch velocity commands
-ros2 topic echo /cmd_vel
-
-# Watch robot feedback
-ros2 topic echo /odom
-```
-
----
-
-## Extending the System
-
-### Use Different Waypoints
-Edit `trajectory_nav/waypoint_loader.py` to load from file or external source.
-
-### Implement Obstacle Avoidance
-Modify `trajectory_nav/trajectory_generator.py` to check collision.
-
-### Add Optimal Time Trajectory
-Replace `trajectory_nav/trajectory_generator.py` with time-optimal algorithm.
-
-### Swap Control Algorithm
-Implement new controller node with same `/trajectory` and `/odom` interface.
-
-See [Architecture](docs/ARCHITECTURE.md) for extension points.
-
----
-
-## Real Robot Deployment
-
-This system is designed to work with real robots:
-
-1. **Turtlebot3** - Tested and working (see [guide](docs/TURTLEBOT3_INTEGRATION.md))
-2. **Clearpath Robots** - Easy adaptation
-3. **Custom Robots** - Provide `/odom` topic, subscribe to `/cmd_vel`
-
-Key steps:
-1. Provide odometry on `/odom`
-2. Subscribe to `/cmd_vel` in your motor driver
-3. Tune parameters for your robot dynamics
-4. Test in simulation first
-
-See [Turtlebot3 Integration](docs/TURTLEBOT3_INTEGRATION.md) for detailed deployment guide.
-
----
-
-## Dependencies
-
-- **ROS2 Jazzy** - Robot Operating System
-- **numpy** - Numerical computing
-- **scipy** - Scientific computing (spline algorithms)
-- **matplotlib** - Optional visualization
-- **tf-transformations** - Quaternion handling
-
-All included in `setup.py`.
-
----
-
-## File Structure
+| Document | Contents |
+|---|---|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Nodes, topics, message contracts, frames and the goal hand-over |
+| [ALGORITHMS.md](docs/ALGORITHMS.md) | Spline smoothing, resampling, timing and pure pursuit, with figures |
+| [PARAMETERS.md](docs/PARAMETERS.md) | Every parameter and launch argument, and tuning advice |
+| [TURTLEBOT3_INTEGRATION.md](docs/TURTLEBOT3_INTEGRATION.md) | Fake node, Gazebo and real robot |
+| [TESTING.md](docs/TESTING.md) | The test suite and the manual end-to-end check |
+| [CHANGELOG.rst](src/trajectory_nav/CHANGELOG.rst) | What changed in each release |
+
+## Repository layout
 
 ```
-trajectory_nav/
-├── README.md                           ← You are here
-├── docs/                               ← Detailed documentation
-│   ├── QUICKSTART.md                   ← Getting started
-│   ├── ARCHITECTURE.md                 ← System design
-│   ├── ALGORITHMS.md                   ← Control algorithms
-│   ├── CONFIG_SIMPLE.md                ← Simple configuration guide
-│   ├── PARAMETERS.md                   ← Detailed parameters reference
-│   └── TURTLEBOT3_INTEGRATION.md       ← Robot setup
-├── config/                             ← Parameter files (edit these!)
-│   ├── trajectory_generator.yaml       ← Sampling & velocity
-│   ├── spline_smoother.yaml            ← Visualization options
-│   └── pure_pursuit_controller.yaml    ← Tracking control (main tuning)
-├── trajectory_nav/
-│   ├── waypoint_loader.py              ← Input generation
-│   ├── spline_smoother.py              ← Path smoothing
-│   ├── trajectory_generator.py          ← Time parameterization
-│   ├── pure_pursuit_controller.py      ← Trajectory tracking
-│   └── trajectory_visualizer.py        ← RViz visualization
-├── launch/
-│   └── trajectory_nav.launch.py        ← Multi-node launcher
-├── test_components.py                  ← Unit tests
-└── setup.py                            ← Package build config
+trajectory_nav/                     repository root
+├── README.md
+├── docs/                           documentation and figures
+└── src/trajectory_nav/             the ROS 2 package (ament_python)
+    ├── trajectory_nav/
+    │   ├── path_math.py            waypoints, smoothing, resampling, timing (no ROS)
+    │   ├── pure_pursuit.py         the tracker (no ROS)
+    │   ├── simulation.py           kinematic closed-loop simulator for tests and figures
+    │   ├── ros_utils.py            Path conversion, latched QoS, node entry point
+    │   └── <five node modules>
+    ├── launch/                     trajectory_nav.launch.py, demo.launch.py
+    ├── config/trajectory_nav.yaml
+    ├── rviz/trajectory_nav.rviz
+    └── test/                       unit, closed-loop and lint tests
 ```
-
----
-
-## Troubleshooting
-
-### "No module named rclpy"
-```bash
-source /opt/ros/jazzy/setup.bash
-```
-
-### Build fails
-```bash
-colcon clean --packages-select trajectory_nav
-colcon build --packages-select trajectory_nav
-```
-
-### Robot doesn't move
-1. Check `/odom` is publishing: `ros2 topic echo /odom`
-2. Check `/trajectory` has points: `ros2 topic echo /trajectory`
-3. Verify controller is running: `ros2 node list`
-
-### Oscillating behavior
-Increase `lookahead_distance` to stabilize (see [tuning](docs/PARAMETERS.md#problem-robot-oscillates-wildly))
-
-### Tests fail
-```bash
-cd src/trajectory_nav
-python3 test_components.py
-```
-
-See output for specific failure.
-
----
 
 ## License
 
-Apache License 2.0
-
----
-
-## Citation
-
-If you use this system in research or education, feel free to cite:
-
-```bibtex
-@software{trajectory_nav_2024,
-  title={Trajectory Navigation: ROS2 Path Smoothing and Pure Pursuit Control},
-  author={Pavan},
-  year={2026},
-  url={https://github.com/pavanmp140102/trajectory-smoothing-ros2.git}
-}
-```
-
----
-
-## Contributing
-
-Found a bug or want to contribute?
-
-1. Report issues
-2. Propose improvements
-3. Submit pull requests
-
----
-
-## Support
-
-For issues or questions:
-
-1. Check [FAQ](docs/QUICKSTART.md#troubleshooting)
-2. Review [Parameters Guide](docs/PARAMETERS.md)
-3. Read [Architecture](docs/ARCHITECTURE.md)
-4. See [Turtlebot3 Guide](docs/TURTLEBOT3_INTEGRATION.md)
-
----
-
-## What's Next?
-
-- ✅ Basic trajectory tracking working
-- 🔄 Ready for real robot deployment
-- 💡 Easy to extend with new features
-- 📚 Well documented for learning
-
-Start with [Quick Start Guide](docs/QUICKSTART.md)!
-
----
-
-**Last Updated**: March 2024  
-**ROS2 Version**: Jazzy  
-**Status**: Ready ✓
+Apache-2.0. See [LICENSE](src/trajectory_nav/LICENSE).

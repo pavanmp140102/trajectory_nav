@@ -1,8 +1,0 @@
-# Pure Pursuit Controller Parameters
-# Controls robot trajectory tracking using pure pursuit algorithm
-
-pure_pursuit_controller:
-  ros__parameters:
-    lookahead_distance: 0.5           # Distance to lookahead point (m)
-    linear_velocity: 0.3              # Forward velocity (m/s)
-    max_angular_velocity: 1.0         # Maximum rotation rate (rad/s)

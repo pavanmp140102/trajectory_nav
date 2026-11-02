@@ -1,169 +1,66 @@
-#!/usr/bin/env python3
+# Copyright 2026 Pavan Patil
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-import rclpy
+"""Trajectory generator node: /smoothed_path to an evenly spaced, timed /trajectory."""
+
+from nav_msgs.msg import Path
 from rclpy.node import Node
 
-import numpy as np
-from nav_msgs.msg import Path
-from geometry_msgs.msg import PoseStamped
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from rosgraph_msgs.msg import Clock
-
-import math
+from trajectory_nav.path_math import assign_times, require_positive, resample_path
+from trajectory_nav.ros_utils import declare_read_only, latched_qos, make_path, path_to_xy, \
+    run_node
 
 
 class TrajectoryGenerator(Node):
+    """Resample the smoothed path at a fixed spacing and stamp each pose with its arrival time."""
 
     def __init__(self):
-        super().__init__("trajectory_generator")
-
-        # ---- PARAMETERS ----
-        self.declare_parameter("sampling_distance", 0.05)
-        self.declare_parameter("velocity", 0.3)
-        
-        self.sampling_distance = self.get_parameter("sampling_distance").value
-        self.velocity = self.get_parameter("velocity").value
-        
-        # ---- SUBSCRIPTION ----
-        self.subscription = self.create_subscription(
-            Path,
-            "/smoothed_path",
-            self.smoothed_path_callback,
-            10
-        )
-
-        # ---- PUBLISHER ----
-        self.trajectory_publisher = self.create_publisher(
-            Path,
-            "/trajectory",
-            10
-        )
-
+        """Declare parameters and connect /smoothed_path to the latched /trajectory."""
+        super().__init__('trajectory_generator')
+        self.frame_id = declare_read_only(self, 'frame_id', 'odom')
+        # Checked here as well as in the path maths, so a bad value stops the node at startup.
+        self.sampling_distance = require_positive(
+            'sampling_distance', declare_read_only(self, 'sampling_distance', 0.05))
+        self.velocity = require_positive('velocity', declare_read_only(self, 'velocity', 0.3))
+        self.publisher = self.create_publisher(Path, '/trajectory', latched_qos())
+        self.create_subscription(Path, '/smoothed_path', self.path_callback, latched_qos())
         self.get_logger().info(
-            f"Trajectory Generator Started "
-            f"(sampling_distance={self.sampling_distance}m, velocity={self.velocity}m/s)"
-        )
+            f'Trajectory generator started (sampling_distance={self.sampling_distance} m, '
+            f'velocity={self.velocity} m/s)')
 
+    def path_callback(self, msg):
+        """
+        Resample the path and publish it as the trajectory.
 
-    def smoothed_path_callback(self, msg):
+        Each pose's header stamp is the time the robot should reach it, assuming
+        constant `velocity` from now.
         """
-        Convert smoothed path (x, y) into time-parameterized trajectory (x, y, t)
-        """
-        if len(msg.poses) < 2:
-            self.get_logger().warn("Not enough poses for trajectory generation")
+        x, y = path_to_xy(msg)
+        x, y = resample_path(x, y, self.sampling_distance)
+        if len(x) < 2:
+            self.get_logger().warn('Not enough distinct poses for a trajectory')
             return
-
-        self.get_logger().info(f"Generating trajectory from {len(msg.poses)} poses")
-
-        # ---- EXTRACT COORDINATES ----
-        poses = msg.poses
-        x_coords = np.array([pose.pose.position.x for pose in poses])
-        y_coords = np.array([pose.pose.position.y for pose in poses])
-
-        # ---- RESAMPLE PATH AT FIXED DISTANCES ----
-        trajectory_points = self.resample_path(x_coords, y_coords)
-
-        if len(trajectory_points) == 0:
-            self.get_logger().warn("Failed to generate trajectory points")
-            return
-
-        # ---- ASSIGN TIMESTAMPS ----
-        trajectory_with_time = self.assign_timestamps(trajectory_points)
-
-        # ---- PUBLISH AS PATH MESSAGE ----
-        self.publish_trajectory(trajectory_with_time)
-
-        self.get_logger().info(f"Published trajectory with {len(trajectory_with_time)} points")
-
-
-    def resample_path(self, x, y):
-        """
-        Resample path at fixed spatial intervals (sampling_distance)
-        Returns: list of (x, y) tuples
-        """
-        trajectory = [(x[0], y[0])]  # Start point
-
-        for i in range(len(x) - 1):
-            dx = x[i+1] - x[i]
-            dy = y[i+1] - y[i]
-            segment_length = np.sqrt(dx**2 + dy**2)
-
-            if segment_length < 1e-6:
-                continue
-
-            # Number of samples in this segment
-            num_samples = max(1, int(np.ceil(segment_length / self.sampling_distance)))
-
-            for j in range(1, num_samples + 1):
-                t = j / num_samples
-                x_sample = x[i] + t * dx
-                y_sample = y[i] + t * dy
-                
-                # Only add if distance from last point is >= sampling_distance
-                if len(trajectory) > 0:
-                    last_x, last_y = trajectory[-1]
-                    dist = np.sqrt((x_sample - last_x)**2 + (y_sample - last_y)**2)
-                    if dist >= self.sampling_distance * 0.9:  # Allow slight tolerance
-                        trajectory.append((x_sample, y_sample))
-
-        return trajectory
-
-
-    def assign_timestamps(self, trajectory_points):
-        """
-        Assign timestamps to trajectory points based on constant velocity
-        Returns: list of (x, y, t) tuples
-        """
-        trajectory_with_time = []
-        current_time = 0.0
-
-        for i, (x, y) in enumerate(trajectory_points):
-            trajectory_with_time.append((x, y, current_time))
-
-            # Calculate distance to next point
-            if i < len(trajectory_points) - 1:
-                next_x, next_y = trajectory_points[i + 1]
-                distance = np.sqrt((next_x - x)**2 + (next_y - y)**2)
-                current_time += distance / self.velocity
-
-        return trajectory_with_time
-
-
-    def publish_trajectory(self, trajectory_with_time):
-        """
-        Publish trajectory as a Path message with timestamps in header
-        """
-        trajectory_msg = Path()
-        trajectory_msg.header.frame_id = "odom"
-        trajectory_msg.header.stamp.sec = 0
-        trajectory_msg.header.stamp.nanosec = 0
-
-        for x, y, t in trajectory_with_time:
-            pose = PoseStamped()
-            pose.header.frame_id = "odom"
-            pose.header.stamp.sec = int(t)
-            pose.header.stamp.nanosec = int((t - int(t)) * 1e9)
-            
-            pose.pose.position.x = float(x)
-            pose.pose.position.y = float(y)
-            pose.pose.position.z = float(t)  # Store time in z component
-
-            trajectory_msg.poses.append(pose)
-
-        self.trajectory_publisher.publish(trajectory_msg)
+        times = assign_times(x, y, self.velocity)
+        self.publisher.publish(make_path(x, y, self.frame_id, self.get_clock().now(), times))
+        self.get_logger().info(f'Published trajectory: {len(x)} points, {times[-1]:.1f} s')
 
 
 def main(args=None):
-
-    rclpy.init(args=args)
-
-    node = TrajectoryGenerator()
-
-    rclpy.spin(node)
-
-    node.destroy_node()
-    rclpy.shutdown()
+    """Run the trajectory generator node."""
+    run_node(TrajectoryGenerator, args)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -1,7 +1,0 @@
-# Trajectory Generator Parameters
-# Converts smooth path to time-parameterized trajectory
-
-trajectory_generator:
-  ros__parameters:
-    sampling_distance: 0.05   # Distance between trajectory points (m)
-    velocity: 0.3             # Constant velocity along trajectory (m/s)

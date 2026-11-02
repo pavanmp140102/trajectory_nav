@@ -1,0 +1,95 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Help Height: 0
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 120
+      Color: 160; 160; 164
+      Alpha: 0.4
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Paths
+      Enabled: true
+      Topic:
+        Value: /trajectory_markers
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Namespaces:
+        raw_path_line: true
+        raw_waypoints: true
+        smoothed_path: true
+        trajectory_points: true
+    - Class: rviz_default_plugins/Odometry
+      Name: Robot trail
+      Enabled: true
+      Topic:
+        Value: /odom
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Keep: 2000
+      Position Tolerance: 0.05
+      Angle Tolerance: 0.5
+      Shape:
+        Value: Arrow
+        Color: 255; 140; 0
+        Alpha: 0.8
+        Shaft Length: 0.15
+        Shaft Radius: 0.02
+        Head Length: 0.06
+        Head Radius: 0.05
+      Covariance:
+        Value: false
+    - Class: rviz_default_plugins/RobotModel
+      Name: Robot
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: odom
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Angle: 0
+      Scale: 55
+      X: 0
+      Y: 0
+      Target Frame: base_footprint
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: true
+  Height: 800
+  Width: 1280
+  Hide Left Dock: true
+  Hide Right Dock: true

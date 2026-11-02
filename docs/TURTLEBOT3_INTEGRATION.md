@@ -1,440 +1,92 @@
-# Turtlebot3 Integration Guide
+# Running with TurtleBot3
 
-Complete guide to integrate the trajectory navigation system with Turtlebot3 simulation (Gazebo).
+This package needs a robot that publishes `/odom` (`nav_msgs/Odometry`) and accepts velocity commands on `/cmd_vel`. TurtleBot3 does both, and it can run in three ways:
 
----
+| Setup | Needs | `/cmd_vel` type | Sim time |
+|---|---|---|---|
+| Fake node (kinematic, no physics) | `turtlebot3_fake_node` | `Twist` | no |
+| Gazebo Harmonic | `turtlebot3_gazebo` | `TwistStamped` | yes |
+| Real robot | `turtlebot3_bringup` on the robot | `TwistStamped` | no |
 
-## Prerequisites
-
-### Install Turtlebot3
+Install the TurtleBot3 packages if you don't have them yet:
 
 ```bash
-# Install packages
-sudo apt install ros-jazzy-turtlebot3-*
-
-# Install Gazebo and dependencies
-sudo apt install ros-jazzy-gazebo-*
-
-# Verify installation
-ros2 pkg list | grep turtlebot
+sudo apt install ros-jazzy-turtlebot3 ros-jazzy-turtlebot3-simulations
 ```
 
-Should list several turtlebot3 packages.
-
-### Environment Setup
+## 1. Fake node (the demo)
 
 ```bash
-# Add to ~/.bashrc (optional, Waffle recommended)
-export TURTLEBOT3_MODEL=waffle
-
-# Or set per-session
-export TURTLEBOT3_MODEL=waffle
+ros2 launch trajectory_nav demo.launch.py
 ```
 
-**Model options:**
-- `waffle`: Full-featured mobile base (recommended)
-- `burger`: Smaller, simpler
-- `waffle_pi`: Raspberry Pi variant
+This starts `turtlebot3_fake_node` (burger), `robot_state_publisher`, the five pipeline nodes and RViz. The fake node integrates the commanded velocities exactly, so it shows what the controller asks for, without physics. Add `rviz:=false` to run it headless.
 
----
+The TurtleBot3 URDF uses xacro properties in its link names, so the demo runs it through `xacro` before handing it to `robot_state_publisher`. Loading the file as plain text gives frames called `${namespace}base_link`, and the robot model in RViz then shows an error.
 
-## Running Together
+![Close-up of the TurtleBot3 burger tracking the path in the demo](images/rviz_closeup.png)
 
-### Step 1: Start Gazebo with Turtlebot3
+## 2. Gazebo
+
+Terminal 1, the simulator:
 
 ```bash
-# Terminal 1
-export TURTLEBOT3_MODEL=waffle
-ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+export TURTLEBOT3_MODEL=burger
+ros2 launch turtlebot3_gazebo empty_world.launch.py
 ```
 
-Should see:
-- Gazebo window with world
-- Turtlebot3 in center
-- Topics available: `/cmd_vel`, `/odom`, etc.
-
-### Step 2: Start Your Navigation System
+Terminal 2, the pipeline:
 
 ```bash
-# Terminal 2
-cd ~/Workspace/nav_assignment_ws
-source install/setup.bash
+ros2 launch trajectory_nav trajectory_nav.launch.py use_sim_time:=true rviz:=true
+```
+
+Use `empty_world`. The random waypoints know nothing about obstacles, so in `turtlebot3_world` the robot will drive into the pillars. The default `stamped_cmd_vel:=true` matches the Jazzy Gazebo bridge, which converts `geometry_msgs/TwistStamped` on `/cmd_vel`.
+
+This setup was last checked on 2026-11-02 with the burger model: the robot reached consecutive goals 0.20 m from the end of each path.
+
+**If the simulator hangs** with the spawner printing `Requesting list of world names` forever, Gazebo's network discovery is failing on your network interface. Pin it to loopback in both terminals:
+
+```bash
+export GZ_IP=127.0.0.1
+```
+
+## 3. Real robot
+
+On the robot:
+
+```bash
+export TURTLEBOT3_MODEL=burger
+ros2 launch turtlebot3_bringup robot.launch.py
+```
+
+On the robot or a PC on the same `ROS_DOMAIN_ID`:
+
+```bash
 ros2 launch trajectory_nav trajectory_nav.launch.py
 ```
 
-### Step 3: Visualize in RViz
+Before letting it drive on its own:
 
-```bash
-# Terminal 3
-rviz2
-```
+- **Give it space.** Each set of waypoints reaches up to about 10 m ahead and ±2 m to the side, and nothing avoids obstacles. Lower `step_max` and `lateral_range` (and `num_waypoints`) for a small room. See [PARAMETERS.md](PARAMETERS.md).
+- **Start slowly.** Use `velocity: 0.15` and a `lookahead_distance` of 0.5 m or more. Real latency and wheel slip make short lookaheads oscillate.
+- **Know how to stop it.** Ctrl-C on the launch sends a final zero command. If odometry stops for more than `odom_timeout` (0.5 s), the controller stops the robot as well.
 
-**Add displays:**
-1. Robot Model → Robot Description: `/robot_description`
-2. Marker Array → Topic: `/trajectory_markers`
-3. Map → Topic: `/map`
-4. TF → Show all frames
+## Other robots
 
----
+Any differential-drive base works if it:
 
-## Expected Behavior
+1. publishes `nav_msgs/Odometry` on `/odom` (or you remap it), in the frame given by `frame_id`. Reliable and best-effort publishers both work;
+2. accepts `TwistStamped` on `/cmd_vel` (or use `stamped_cmd_vel:=false` for `Twist`).
 
-When running together:
-
-1. **Waypoint generation**: Random waypoints appear
-2. **Spline smoothing**: Waypoints are smoothed
-3. **Trajectory generation**: Smooth trajectory created
-4. **Pure pursuit control**: 
-   - Robot starts moving
-   - Follows the trajectory
-   - Updates odometry in real-time
-5. **Visualization**: 
-   - Robot follows the path
-   - Markers show planned trajectory
-
----
-
-## Tuning for Turtlebot3
-
-### Reduced Parameters
-
-Turtlebot3 is slower, so reduce parameters:
-
-```bash
-# More conservative
-ros2 run trajectory_nav pure_pursuit_controller \
-  --ros-args \
-  -p lookahead_distance:=0.3 \
-  -p linear_velocity:=0.2 \
-  -p max_angular_velocity:=1.0
-```
-
-### Updated Sampling
-
-```bash
-ros2 run trajectory_nav trajectory_generator \
-  --ros-args \
-  -p sampling_distance:=0.1 \
-  -p velocity:=0.2
-```
-
----
-
-## Create Unified Launch File
-
-For easy startup, create `launch/turtlebot3_nav.launch.py`:
-
-```python
-#!/usr/bin/env python3
-
-import os
-from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from ament_index_python.packages import get_package_share_directory
-
-def generate_launch_description():
-    
-    # Package directories
-    tb3_gazebo_dir = get_package_share_directory('turtlebot3_gazebo')
-    traj_nav_dir = get_package_share_directory('trajectory_nav')
-    
-    # Gazebo simulator
-    gazebo = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(tb3_gazebo_dir, 'launch', 'turtlebot3_world.launch.py')
-        )
-    )
-    
-    # Navigation pipeline
-    waypoint_loader = Node(
-        package='trajectory_nav',
-        executable='waypoint_loader',
-        output='screen',
-    )
-    
-    spline_smoother = Node(
-        package='trajectory_nav',
-        executable='spline_smoother',
-        output='screen',
-    )
-    
-    trajectory_generator = Node(
-        package='trajectory_nav',
-        executable='trajectory_generator',
-        output='screen',
-        parameters=[{
-            'sampling_distance': 0.1,
-            'velocity': 0.2,
-        }],
-    )
-    
-    pure_pursuit = Node(
-        package='trajectory_nav',
-        executable='pure_pursuit_controller',
-        output='screen',
-        parameters=[{
-            'lookahead_distance': 0.3,
-            'linear_velocity': 0.2,
-            'max_angular_velocity': 1.0,
-        }],
-    )
-    
-    visualizer = Node(
-        package='trajectory_nav',
-        executable='trajectory_visualizer',
-        output='screen',
-    )
-    
-    # Launch
-    ld = LaunchDescription([
-        gazebo,
-        waypoint_loader,
-        spline_smoother,
-        trajectory_generator,
-        pure_pursuit,
-        visualizer,
-    ])
-    
-    return ld
-```
-
-Then use:
-```bash
-ros2 launch trajectory_nav turtlebot3_nav.launch.py
-```
-
----
-
-## Monitoring the Robot
-
-### Check Topics
-
-```bash
-# All available topics
-ros2 topic list
-
-# Watch velocity commands
-ros2 topic echo /cmd_vel
-
-# Watch odometry feedback
-ros2 topic echo /odom
-
-# Watch robot TF
-ros2 tf2_echo map base_link
-```
-
-### Monitor Performance
-
-```bash
-# Record bag for analysis
-ros2 bag record -o tb3_run /cmd_vel /odom /trajectory
-```
-
-Later analyze offline:
-```bash
-ros2 bag play tb3_run
-```
-
----
+To remap topics, add `remappings` to the nodes in your own launch file, for example `('/odom', '/my_robot/odom')`.
 
 ## Troubleshooting
 
-### Robot Doesn't Move
-1. Check topics:
-   ```bash
-   ros2 topic list | grep cmd_vel
-   ```
-2. Check odometry:
-   ```bash
-   ros2 topic echo /odom
-   ```
-3. Verify pure pursuit is running:
-   ```bash
-   ros2 node list | grep pure_pursuit
-   ```
-
-### Robot Moves Erratically
-- `/odom` feedback may be unstable
-- Increase `lookahead_distance` to stabilize
-- Reduce `linear_velocity` for better tracking
-
-### Simulation Slow
-- Close other applications
-- Reduce graphics quality in Gazebo
-- Reduce trajectory density (`sampling_distance: 0.2`)
-
-### "Turtlebot3 model not found"
-```bash
-# Set model and try again
-export TURTLEBOT3_MODEL=waffle
-ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
-```
-
-### "Cannot connect to display"
-If running remotely:
-```bash
-# Enable X11 forwarding or use headless mode
-export DISPLAY=:0  # If X11 available
-# Or use command-line interfaces only
-```
-
----
-
-## Performance Tuning
-
-### For Smooth Tracking (Priority: Smoothness)
-```python
-parameters=[{
-    'lookahead_distance': 0.5,
-    'linear_velocity': 0.15,
-    'max_angular_velocity': 0.8,
-}]
-```
-
-### For Fast Tracking (Priority: Speed)
-```python
-parameters=[{
-    'lookahead_distance': 0.2,
-    'linear_velocity': 0.4,
-    'max_angular_velocity': 1.5,
-}]
-```
-
-### For Tight Turns (Priority: Accuracy)
-```python
-parameters=[{
-    'lookahead_distance': 0.2,
-    'linear_velocity': 0.15,
-    'max_angular_velocity': 1.0,
-}]
-```
-
----
-
-## Real Robot Deployment
-
-After testing in simulation, to deploy on real Turtlebot3:
-
-### 1. Install on Robot
-```bash
-# SSH into turtlebot
-ssh ubuntu@turtlebot
-cd ~/nav_ws
-colcon build --packages-select trajectory_nav
-source install/setup.bash
-```
-
-### 2. Adapt Odometry
-
-The real Turtlebot3 publishes `/odom` the same way, so little changes needed.
-
-### 3. Run Controller Only
-
-```bash
-# On workstation, just the navigator
-ros2 run trajectory_nav pure_pursuit_controller \
-  --ros-args \
-  -p lookahead_distance:=0.4 \
-  -p linear_velocity:=0.25
-
-# On robot or workstation, the rest
-ros2 launch trajectory_nav trajectory_nav.launch.py
-```
-
-### 4. Verify Network
-
-```bash
-# On workstation, check if you can see robot topics
-ros2 topic list
-
-# Should see /odom and other robot topics
-```
-
-### 5. Tune for Real Robot
-Real robots are noisier, adjust:
-```python
-parameters=[{
-    'lookahead_distance': 0.5,      # Increase (was 0.3)
-    'linear_velocity': 0.2,          # Conservative
-    'max_angular_velocity': 0.8,     # Lower
-}]
-```
-
----
-
-## Turtlebot3 Specifications
-
-| Parameter | Waffle | Burger |
-|-----------|--------|--------|
-| Max Velocity | 0.26 m/s | 0.22 m/s |
-| Max Ang. Velocity | 2.84 rad/s | 2.84 rad/s |
-| Wheel Radius | 0.033 m | 0.033 m |
-| Wheel Base | 0.160 m | 0.160 m |
-| Odom Frequency | ~30 Hz | ~30 Hz |
-
-Recommended settings:
-- `linear_velocity`: 0.15 - 0.2 m/s (well under max)
-- `max_angular_velocity`: 1.0 rad/s (safe margin)
-- `lookahead_distance`: 0.3 - 0.5 m
-
----
-
-## Common Issues & Solutions
-
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| Robot overshoots | Lookahead too far | Decrease `lookahead_distance` |
-| Robot oscillates | Lookahead too short | Increase `lookahead_distance` |
-| Slow response | Conservative params | Increase `linear_velocity` |
-| Jerky motion | Sampling too coarse | Decrease `sampling_distance` |
-| No odometry | Topic not published | Check Gazebo/robot |
-| Crashes into walls | Path planning issue | Check waypoint generation |
-
----
-
-## Recording & Playback
-
-### Record Trajectory
-
-```bash
-# Terminal 1: Start everything
-ros2 launch trajectory_nav turtlebot3_nav.launch.py
-
-# Terminal 2: Record bag
-ros2 bag record -o my_trajectory \
-  /cmd_vel /odom /trajectory /tf
-```
-
-Robot will execute. Ctrl+C to stop recording.
-
-### Analyze Later
-
-```bash
-ros2 bag play my_trajectory
-
-# In RViz, watch it replay
-rviz2
-```
-
----
-
-## Performance Benchmarks
-
-### Typical Performance (Simulation)
-
-- **Trajectory Tracking Error**: < 0.2 m
-- **Control Loop Frequency**: ~10 Hz
-- **Execution Time**: Robot follows path smoothly
-- **Memory Usage**: < 50 MB
-- **CPU Usage**: < 5%
-
-### Real Robot Expected
-
-- Similar tracking error (depends on wheel slippage)
-- Odometry noise: ±0.05 m drift/5 meters
-- More vibration, less smooth motion
-- Tuning critical for good performance
-
-See [PARAMETERS.md](PARAMETERS.md) for detailed tuning guide.
+| Symptom | Likely cause | Check |
+|---|---|---|
+| Robot doesn't move, no warnings | No `/odom`, so the loader is still waiting | `ros2 topic hz /odom` |
+| Robot doesn't move, `/cmd_vel` is published | Wrong message type for the driver | `ros2 topic info /cmd_vel -v`: publisher and subscriber types must match; set `stamped_cmd_vel` |
+| "Odometry is stale, stopping" | Odometry slower than 2 Hz, or the clocks disagree | `use_sim_time:=true` with Gazebo, `false` otherwise |
+| No paths in RViz | RViz subscribing with volatile durability | The provided config uses transient local; if you add the display yourself, set *Durability Policy* to *Transient Local* |
+| Robot model red in RViz | URDF not expanded with xacro, or no TF | Use `demo.launch.py`, or check `ros2 run tf2_ros tf2_echo odom base_footprint` |
