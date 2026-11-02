@@ -15,13 +15,15 @@
 
 """Waypoint loader node: publishes random waypoints ahead of the robot on /raw_path."""
 
+import math
+
 from nav_msgs.msg import Odometry, Path
 import numpy as np
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Empty
 
-from trajectory_nav.path_math import generate_waypoints, yaw_from_quaternion
+from trajectory_nav.path_math import generate_waypoints, require_positive, yaw_from_quaternion
 from trajectory_nav.ros_utils import declare_read_only, event_qos, latched_qos, make_path, \
     run_node
 
@@ -34,16 +36,16 @@ class WaypointLoader(Node):
         super().__init__('waypoint_loader')
         self.frame_id = declare_read_only(self, 'frame_id', 'odom')
         self.num_waypoints = declare_read_only(self, 'num_waypoints', 6)
-        self.step_min = declare_read_only(self, 'step_min', 1.0)
-        self.step_max = declare_read_only(self, 'step_max', 2.0)
+        self.step_min = require_positive('step_min', declare_read_only(self, 'step_min', 1.0))
+        self.step_max = require_positive('step_max', declare_read_only(self, 'step_max', 2.0))
         self.lateral_range = declare_read_only(self, 'lateral_range', 2.0)
         seed = declare_read_only(self, 'seed', -1)
         if self.num_waypoints < 3:
             raise ValueError('num_waypoints must be at least 3 for the spline smoother')
-        if not 0.0 < self.step_min <= self.step_max:
-            raise ValueError('need 0 < step_min <= step_max')
-        if self.lateral_range < 0.0:
-            raise ValueError('lateral_range must not be negative')
+        if self.step_min > self.step_max:
+            raise ValueError('step_min must not be larger than step_max')
+        if not (math.isfinite(self.lateral_range) and self.lateral_range >= 0.0):
+            raise ValueError('lateral_range must be a number that is not negative')
         self.rng = np.random.default_rng(None if seed < 0 else seed)
 
         self.waypoints = None
@@ -54,10 +56,21 @@ class WaypointLoader(Node):
         self.get_logger().info('Waypoint loader started, waiting for /odom')
 
     def odom_callback(self, msg):
-        """Keep the latest robot pose, and publish the first waypoint set once it is known."""
+        """Keep the latest valid pose, and publish the first waypoint set once one is known."""
+        if not self.pose_is_finite(msg.pose.pose):
+            self.get_logger().warn('Ignoring odometry that is not finite',
+                                   throttle_duration_sec=5.0)
+            return
         self.robot_pose = msg.pose.pose
         if self.waypoints is None:
             self.publish_waypoints()
+
+    @staticmethod
+    def pose_is_finite(pose):
+        """Return True if the pose's position and orientation are all finite numbers."""
+        values = (pose.position.x, pose.position.y, pose.orientation.x, pose.orientation.y,
+                  pose.orientation.z, pose.orientation.w)
+        return all(math.isfinite(value) for value in values)
 
     def goal_callback(self, msg):
         """Publish the next waypoint set when the controller reports that it reached the goal."""

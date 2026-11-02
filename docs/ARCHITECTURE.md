@@ -25,7 +25,7 @@ The maths sits in modules that don't import ROS (`path_math.py`, `pure_pursuit.p
 |---|---|
 | `path_math.py` | Waypoint generation, duplicate removal, spline smoothing, arc-length resampling, timing, headings, quaternion helpers |
 | `pure_pursuit.py` | `PurePursuit`: progress tracking, lookahead search, steering law, slow-down, goal latch |
-| `simulation.py` | Unicycle simulator and cross-track error, used by the tests and the figure script |
+| `simulation.py` | Unicycle simulator and cross-track error, used by the tests |
 | `ros_utils.py` | `nav_msgs/Path` conversion, the latched QoS profile, the shared `main()` |
 
 ## Nodes
@@ -62,7 +62,7 @@ It runs at `control_frequency` (20 Hz) and works through these cases in order:
 |---|---|
 | No trajectory or no odometry yet | nothing published |
 | Odometry older than `odom_timeout`, or not finite (NaN, infinity) | one zero command, then a throttled warning |
-| Within `goal_tolerance` of the last point | one zero command and one `/goal_reached` message; done until a new trajectory arrives |
+| Within `goal_tolerance` of the last point | one zero command and one `/goal_reached` message; done until a new trajectory arrives. If none arrives within `goal_retry_period` (2 s), a warning is logged and `/goal_reached` is sent again |
 | Lookahead point more than 90° off the heading | turn in place |
 | Otherwise | pure pursuit, see [ALGORITHMS.md](ALGORITHMS.md#4-pure-pursuit) |
 

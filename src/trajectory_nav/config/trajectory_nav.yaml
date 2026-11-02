@@ -31,3 +31,4 @@ pure_pursuit_controller:
     min_velocity: 0.05        # speed on arrival at goal_tolerance (m/s)
     odom_timeout: 0.5         # stop if odometry is older than this (s)
     control_frequency: 20.0   # control loop rate (Hz)
+    goal_retry_period: 2.0    # ask for a new path again if none arrives this long after a goal (s)

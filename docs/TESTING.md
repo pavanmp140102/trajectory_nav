@@ -10,7 +10,7 @@ colcon test --packages-select trajectory_nav
 colcon test-result --verbose
 ```
 
-Expected result: `41 tests, 0 errors, 0 failures, 0 skipped`.
+Expected result: `62 tests, 0 errors, 0 failures, 0 skipped`.
 
 The maths tests don't need ROS running, so you can also run them directly while you work:
 
@@ -28,6 +28,7 @@ python3 -m pytest test/test_path_math.py test/test_pure_pursuit.py -v
 | waypoints start at robot | first waypoint = robot position; later ones move forward along the heading |
 | waypoints reproducible | the same seed gives the same waypoints |
 | waypoint count | fewer than 3 waypoints is rejected up front |
+| positive numbers | zero, negatives, NaN and infinity are rejected by `require_positive` |
 | remove close points | duplicates and near-duplicates are dropped |
 | smoothing passes through waypoints | over 50 random sets: endpoints kept, every waypoint on the curve |
 | smoothing density | sample spacing follows `resolution`, not a fixed count |
@@ -49,10 +50,14 @@ python3 -m pytest test/test_path_math.py test/test_pure_pursuit.py -v
 | target behind | turns in place |
 | clamping keeps curvature | v scales with ω, so the arc stays the same |
 | stop and latch | stops inside the tolerance and stays stopped |
-| invalid tuning | 7 bad values (including `min_velocity` of 0) each raise `ValueError`; an unknown name raises `TypeError` |
+| invalid tuning | 13 bad values (zero, negative, NaN, infinity) each raise `ValueError`; an unknown name raises `TypeError` |
 | path received mid-route | a fresh tracker starts at the robot's nearest point, over 30 random paths, and from a mid-path start finishes without going back |
 | non-finite pose | NaN or infinite odometry gives a stop, not a NaN command |
 | long path | the windowed lookahead scan finds the same point as a full scan |
+| sparse path | paths with points 0.05 to 3 m apart are all followed to the goal |
+| passed points | the lookahead never picks a point the robot has already driven past |
+| search window | every window holds at least two points, so sparse paths can be stepped through |
+| non-finite path | a path with NaN or infinity is rejected |
 | closed loop, 20 random paths | the simulated robot reaches every goal and stays within 0.6 m of the path |
 | closed loop, path re-sent every step | the old 10 Hz republish no longer breaks tracking |
 

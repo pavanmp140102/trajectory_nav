@@ -142,7 +142,10 @@ def test_stops_and_latches_at_goal():
 @pytest.mark.parametrize('name, value', [
     ('lookahead_distance', 0.0), ('velocity', -1.0), ('max_angular_velocity', 0.0),
     ('goal_tolerance', 0.0), ('slowdown_distance', -0.1), ('min_velocity', 1.0),
-    ('min_velocity', 0.0)])
+    ('min_velocity', 0.0),
+    ('lookahead_distance', float('nan')), ('lookahead_distance', float('inf')),
+    ('goal_tolerance', float('nan')), ('max_angular_velocity', float('nan')),
+    ('slowdown_distance', float('nan')), ('velocity', float('inf'))])
 def test_rejects_invalid_tuning(name, value):
     """Invalid parameters raise instead of silently producing zero commands."""
     with pytest.raises(ValueError):
@@ -225,3 +228,48 @@ def test_rejects_unknown_tuning():
     """A misspelt tuning name is an error, not silently ignored."""
     with pytest.raises(TypeError):
         PurePursuit(look_ahead=0.5)
+
+
+@pytest.mark.parametrize('spacing', [0.05, 0.5, 1.0, 1.2, 2.0, 3.0])
+def test_sparse_path_still_reaches_goal(spacing):
+    """A path with points further apart than the search window is still followed to the end."""
+    rng = np.random.default_rng(SEED)
+    for _ in range(4):
+        waypoints = generate_waypoints(0.0, 0.0, 0.0, rng=rng)
+        sx, sy = smooth_path(waypoints[:, 0], waypoints[:, 1])
+        x, y = resample_path(sx, sy, spacing)
+        tracker = PurePursuit()
+        tracker.set_path(x, y)
+        simulate(tracker, 0.0, 0.0, 0.0, max_time=300.0)
+        assert tracker.done
+
+
+def test_search_window_holds_two_points():
+    """Every search window holds at least two points, except at the very end of the path."""
+    tracker = PurePursuit(lookahead_distance=0.5)
+    tracker.set_path(*straight_path(length=20.0, spacing=3.0))
+    for start in range(len(tracker.path) - 1):
+        assert tracker.window_end(start) >= start + 2
+    assert tracker.window_end(len(tracker.path) - 1) == len(tracker.path)
+
+
+def test_rejects_paths_with_non_finite_points():
+    """A path with NaN or infinity is refused, so repeated copies cannot reset progress."""
+    tracker = PurePursuit()
+    x, y = straight_path()
+    for bad in (float('nan'), float('inf')):
+        broken = x.copy()
+        broken[10] = bad
+        with pytest.raises(ValueError):
+            tracker.set_path(broken, y)
+    assert tracker.path is None
+
+
+def test_lookahead_skips_points_already_passed():
+    """On a sparse path the target is never a point the robot has already driven beyond."""
+    x, y = straight_path(length=6.0, spacing=1.2)
+    tracker = PurePursuit(lookahead_distance=0.5)
+    tracker.set_path(x, y)
+    tracker.update_progress(0.55, 0.0)
+    assert tracker.progress_index == 0
+    assert tracker.lookahead_index(0.55, 0.0) == 1

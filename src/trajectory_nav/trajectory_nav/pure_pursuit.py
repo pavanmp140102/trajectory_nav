@@ -42,6 +42,7 @@ class PurePursuit:
             raise TypeError(f'unknown tuning: {sorted(unknown)}')
         self.path = None
         self.arc_length = None
+        self.directions = None
         self.progress_index = 0
         self.progress_known = False
         self.done = False
@@ -59,17 +60,14 @@ class PurePursuit:
             linearly to min_velocity at goal_tolerance. 0 (or <= goal_tolerance) disables it.
         min_velocity: speed on arrival at the goal tolerance, so the robot still gets there (m/s).
         """
-        if lookahead_distance <= 0.0:
-            raise ValueError('lookahead_distance must be positive')
-        if velocity <= 0.0:
-            raise ValueError('velocity must be positive')
-        if max_angular_velocity <= 0.0:
-            raise ValueError('max_angular_velocity must be positive')
-        if goal_tolerance <= 0.0:
-            raise ValueError('goal_tolerance must be positive')
-        if slowdown_distance < 0.0:
-            raise ValueError('slowdown_distance must not be negative')
-        if not 0.0 < min_velocity <= velocity:
+        for name, value in (('lookahead_distance', lookahead_distance), ('velocity', velocity),
+                            ('max_angular_velocity', max_angular_velocity),
+                            ('goal_tolerance', goal_tolerance)):
+            if not (math.isfinite(value) and value > 0.0):
+                raise ValueError(f'{name} must be a positive number')
+        if not (math.isfinite(slowdown_distance) and slowdown_distance >= 0.0):
+            raise ValueError('slowdown_distance must be a number that is not negative')
+        if not (math.isfinite(min_velocity) and 0.0 < min_velocity <= velocity):
             raise ValueError('min_velocity must be greater than 0 and at most velocity')
         self.lookahead_distance = lookahead_distance
         self.velocity = velocity
@@ -90,11 +88,16 @@ class PurePursuit:
         new_path = np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
         if len(new_path) == 0:
             raise ValueError('path is empty')
+        if not np.all(np.isfinite(new_path)):
+            raise ValueError('path has coordinates that are not finite')
         if (self.path is not None and new_path.shape == self.path.shape
                 and np.allclose(new_path, self.path)):
             return False
         self.path = new_path
         self.arc_length = cumulative_arc_length(new_path[:, 0], new_path[:, 1])
+        # Direction of travel at each point; the last point reuses the final segment.
+        steps = np.diff(new_path, axis=0) if len(new_path) > 1 else np.zeros((1, 2))
+        self.directions = np.vstack([steps, steps[-1:]])
         self.progress_index = 0
         self.progress_known = False
         self.done = False
@@ -113,37 +116,44 @@ class PurePursuit:
             self.progress_index = int(np.argmin(distances))
             self.progress_known = True
             return self.progress_index
-        window = self.search_window()
         while True:
             start = self.progress_index
-            end = int(np.searchsorted(self.arc_length, self.arc_length[start] + window,
-                                      side='right'))
+            end = self.window_end(start)
             distances = np.hypot(self.path[start:end, 0] - x, self.path[start:end, 1] - y)
             self.progress_index = start + int(np.argmin(distances))
-            if self.progress_index != end - 1 or end >= len(self.path) or end - 1 == start:
+            if self.progress_index != end - 1 or end >= len(self.path):
                 return self.progress_index
 
-    def search_window(self):
-        """Return how far along the path (m) the progress and lookahead searches look at a time."""
-        return max(1.0, 3.0 * self.lookahead_distance)
+    def window_end(self, start):
+        """
+        Return the end index (exclusive) of the search window that begins at `start`.
+
+        The window spans a few lookahead distances of path, but always holds at least two
+        points, so a sparsely sampled path (points further apart than the window) can
+        still be stepped through. Both the progress and the lookahead search use it.
+        """
+        reach = self.arc_length[start] + max(1.0, 3.0 * self.lookahead_distance)
+        end = int(np.searchsorted(self.arc_length, reach, side='right'))
+        return min(max(end, start + 2), len(self.path))
 
     def lookahead_index(self, x, y):
         """
-        Return the first point at least the lookahead away, scanning forward; else the last.
+        Return the first point ahead of the robot and at least the lookahead away; else the last.
 
+        A point the robot has already driven beyond along the path does not count, even
+        if it is far enough away: on a sparse path that would send the robot back to it.
         The scan goes one window at a time, so a long path costs no more per control
         step than a short one.
         """
         start = self.progress_index
-        window = self.search_window()
         while start < len(self.path):
-            end = int(np.searchsorted(self.arc_length, self.arc_length[start] + window,
-                                      side='right'))
-            end = max(end, start + 1)
-            distances = np.hypot(self.path[start:end, 0] - x, self.path[start:end, 1] - y)
-            beyond = np.nonzero(distances >= self.lookahead_distance)[0]
-            if len(beyond):
-                return start + int(beyond[0])
+            end = self.window_end(start)
+            offsets = self.path[start:end] - np.array([x, y])
+            distances = np.hypot(offsets[:, 0], offsets[:, 1])
+            ahead = np.sum(offsets * self.directions[start:end], axis=1) >= 0.0
+            candidates = np.nonzero((distances >= self.lookahead_distance) & ahead)[0]
+            if len(candidates):
+                return start + int(candidates[0])
             start = end
         return len(self.path) - 1
 
@@ -190,7 +200,7 @@ class PurePursuit:
         self.update_progress(x, y)
         target_x, target_y = self.path[self.lookahead_index(x, y)]
         dx, dy = target_x - x, target_y - y
-        target_distance = math.hypot(dx, dy)
+        target_distance = max(math.hypot(dx, dy), 1e-9)
         alpha = wrap_angle(math.atan2(dy, dx) - yaw)
 
         if abs(alpha) > math.pi / 2.0:

@@ -28,10 +28,23 @@ Fixed
   ``odom_timeout`` and ``control_frequency``.
 * ``/odom`` is subscribed with sensor-data QoS, so best-effort odometry publishers work.
 * The lookahead scan looks one window at a time instead of at every remaining path point.
+* **A sparsely sampled path was never finished.** With points further apart than the search
+  window, progress never advanced and the lookahead could pick a point the robot had already
+  passed, so the robot circled near the start. Search windows now hold at least two points,
+  and the lookahead skips points the robot has driven past. Paths with points up to 3 m
+  apart are tracked to the goal.
+* **NaN and infinity passed the parameter checks** (``<= 0`` is false for NaN), so a NaN
+  ``goal_tolerance`` could stop the goal from ever being reached. All numeric parameters
+  must now be finite, and a path with non-finite coordinates is rejected.
+* **One NaN odometry message at startup stalled the pipeline.** The loader published NaN
+  waypoints once and never again. It now ignores odometry that is not finite.
+* **A lost ``/goal_reached`` left the controller waiting silently.** It now logs a warning
+  and sends it again every ``goal_retry_period`` until a new trajectory arrives.
 
 Added
 ~~~~~
-* ``/goal_reached`` (``std_msgs/Empty``): sent once by the controller when it reaches the goal.
+* ``/goal_reached`` (``std_msgs/Empty``): sent by the controller when it reaches the goal.
+* ``goal_retry_period`` controller parameter (default 2 s, read-only).
 
 Changed
 ~~~~~~~

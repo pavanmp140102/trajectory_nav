@@ -22,8 +22,8 @@ import pytest
 
 from trajectory_nav.path_math import (
     assign_times, cumulative_arc_length, generate_waypoints, path_headings,
-    quaternion_from_yaw, remove_close_points, resample_path, smooth_path, wrap_angle,
-    yaw_from_quaternion)
+    quaternion_from_yaw, remove_close_points, require_positive, resample_path, smooth_path,
+    wrap_angle, yaw_from_quaternion)
 
 SEED = 42
 
@@ -142,3 +142,15 @@ def test_waypoints_need_three_points():
     """Fewer than three waypoints cannot be smoothed, so they are rejected up front."""
     with pytest.raises(ValueError):
         generate_waypoints(0, 0, 0, count=2)
+
+
+@pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf'), -float('inf')])
+def test_require_positive_rejects_bad_numbers(value):
+    """Zero, negatives, NaN and infinity are all rejected, so none reach the nodes."""
+    with pytest.raises(ValueError):
+        require_positive('x', value)
+
+
+def test_require_positive_returns_good_values():
+    """A normal positive number passes through unchanged."""
+    assert require_positive('x', 0.05) == 0.05

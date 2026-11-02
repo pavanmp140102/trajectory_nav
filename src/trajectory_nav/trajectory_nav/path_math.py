@@ -21,6 +21,13 @@ import numpy as np
 from scipy.interpolate import CubicSpline
 
 
+def require_positive(name, value):
+    """Return `value` if it is a finite number above 0, else raise (NaN and infinity fail)."""
+    if not (math.isfinite(value) and value > 0.0):
+        raise ValueError(f'{name} must be a positive number, got {value}')
+    return value
+
+
 def generate_waypoints(start_x, start_y, start_yaw, count=6, step_range=(1.0, 2.0),
                        lateral_range=2.0, rng=None):
     """

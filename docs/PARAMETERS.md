@@ -1,6 +1,6 @@
 # Parameters
 
-All nodes read [`config/trajectory_nav.yaml`](../src/trajectory_nav/config/trajectory_nav.yaml). Parameters under `/**` apply to every node, so values that must agree, such as the speed and the goal tolerance, are set once.
+All nodes read [`config/trajectory_nav.yaml`](../src/trajectory_nav/config/trajectory_nav.yaml). Parameters under `/**` apply to every node, so values that must agree, such as the speed, are set once.
 
 ## Shared (`/**`)
 
@@ -43,6 +43,7 @@ All nodes read [`config/trajectory_nav.yaml`](../src/trajectory_nav/config/traje
 | `velocity` | 0.3 m/s | yes | Cruise speed (shared) |
 | `odom_timeout` | 0.5 s | no | Stop if odometry is older than this |
 | `control_frequency` | 20 Hz | no | Control loop rate |
+| `goal_retry_period` | 2.0 s | no | After the goal, how long to wait for a new trajectory before warning and sending `/goal_reached` again |
 | `stamped_cmd_vel` | true | no | `TwistStamped` on `/cmd_vel`; false for `Twist`. Set by the launch argument of the same name |
 
 Parameters marked **Runtime** can be changed while the controller runs. Invalid values are rejected and the old ones are kept. Every other parameter, in every node, is read once at startup and is **read-only**: `ros2 param set` on it fails instead of appearing to work.
@@ -54,7 +55,7 @@ ros2 param set /pure_pursuit_controller lookahead_distance 0.0  # rejected: must
 
 Changing `velocity` at runtime affects only the controller. The trajectory timestamps keep using the speed the generator started with.
 
-These limits are enforced: lookahead, velocity, turn rate and goal tolerance must be positive, `slowdown_distance` must not be negative, and `min_velocity` must be greater than 0 and at most `velocity`. At startup, `num_waypoints` must be at least 3 (the spline smoother needs three points), `0 < step_min <= step_max`, and `lateral_range`, `resolution`, `sampling_distance`, `odom_timeout` and `control_frequency` must be valid, or the node exits with an error.
+These limits are enforced: lookahead, velocity, turn rate and goal tolerance must be positive, `slowdown_distance` must not be negative, and `min_velocity` must be greater than 0 and at most `velocity`. At startup, `num_waypoints` must be at least 3 (the spline smoother needs three points), `0 < step_min <= step_max`, and `lateral_range`, `resolution`, `sampling_distance`, `odom_timeout`, `control_frequency` and `goal_retry_period` must be valid, or the node exits with an error. "Valid" means a finite number: NaN and infinity are rejected everywhere, at startup and at runtime.
 
 ## Launch arguments
 

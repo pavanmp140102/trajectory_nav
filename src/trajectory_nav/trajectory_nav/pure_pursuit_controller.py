@@ -25,7 +25,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import Empty
 
-from trajectory_nav.path_math import yaw_from_quaternion
+from trajectory_nav.path_math import require_positive, yaw_from_quaternion
 from trajectory_nav.pure_pursuit import DEFAULT_TUNING, PurePursuit
 from trajectory_nav.ros_utils import declare_read_only, event_qos, latched_qos, path_to_xy, \
     run_node
@@ -39,11 +39,13 @@ class PurePursuitController(Node):
         super().__init__('pure_pursuit_controller')
         for name, default in DEFAULT_TUNING.items():
             self.declare_parameter(name, default)
-        self.odom_timeout = declare_read_only(self, 'odom_timeout', 0.5)
-        control_frequency = declare_read_only(self, 'control_frequency', 20.0)
+        self.odom_timeout = require_positive(
+            'odom_timeout', declare_read_only(self, 'odom_timeout', 0.5))
+        control_frequency = require_positive(
+            'control_frequency', declare_read_only(self, 'control_frequency', 20.0))
+        self.goal_retry_period = require_positive(
+            'goal_retry_period', declare_read_only(self, 'goal_retry_period', 2.0))
         self.stamped_cmd_vel = declare_read_only(self, 'stamped_cmd_vel', True)
-        if self.odom_timeout <= 0.0 or control_frequency <= 0.0:
-            raise ValueError('odom_timeout and control_frequency must be positive')
 
         self.tracker = PurePursuit(**{name: self.get_parameter(name).value
                                       for name in DEFAULT_TUNING})
@@ -52,6 +54,7 @@ class PurePursuitController(Node):
         self.robot_pose = None
         self.odom_time = None
         self.stopped = True
+        self.goal_sent_time = None
 
         self.create_subscription(Path, '/trajectory', self.trajectory_callback, latched_qos())
         self.create_subscription(Odometry, '/odom', self.odom_callback, qos_profile_sensor_data)
@@ -78,10 +81,13 @@ class PurePursuitController(Node):
     def trajectory_callback(self, msg):
         """Hand a new trajectory to the tracker; an unchanged one keeps the current progress."""
         x, y = path_to_xy(msg)
-        if len(x) == 0:
-            self.get_logger().warn('Received an empty trajectory')
+        try:
+            changed = self.tracker.set_path(x, y)
+        except ValueError as error:
+            self.get_logger().warn(f'Ignoring trajectory: {error}')
             return
-        if self.tracker.set_path(x, y):
+        if changed:
+            self.goal_sent_time = None
             self.get_logger().info(f'Tracking new trajectory with {len(x)} points')
 
     def odom_callback(self, msg):
@@ -111,16 +117,31 @@ class PurePursuitController(Node):
             self.stop()
             return
 
-        was_done = self.tracker.done
         linear, angular = self.tracker.compute(*pose)
         if self.tracker.done:
-            if not was_done:
-                self.get_logger().info('Trajectory complete')
-                self.goal_publisher.publish(Empty())
             self.stop()
+            self.announce_goal()
             return
         self.publish_cmd_vel(linear, angular)
         self.stopped = False
+
+    def announce_goal(self):
+        """
+        Tell the waypoint loader the goal is reached, and ask again if no new trajectory follows.
+
+        /goal_reached is a single volatile message, so if the next path never arrives (a
+        node was not listening yet, or a path was rejected) the controller would wait
+        silently for ever. Repeating it every `goal_retry_period` seconds recovers.
+        """
+        now = self.get_clock().now()
+        if self.goal_sent_time is None:
+            self.get_logger().info('Trajectory complete')
+        elif now - self.goal_sent_time < Duration(seconds=self.goal_retry_period):
+            return
+        else:
+            self.get_logger().warn('No new trajectory since the goal was reached, asking again')
+        self.goal_sent_time = now
+        self.goal_publisher.publish(Empty())
 
     def stop(self):
         """Send one zero-velocity command when the robot stops, instead of flooding /cmd_vel."""
