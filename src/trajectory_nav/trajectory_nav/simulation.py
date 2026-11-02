@@ -19,6 +19,8 @@ import math
 
 import numpy as np
 
+from trajectory_nav.path_math import wrap_angle
+
 
 def simulate(tracker, x, y, yaw, dt=0.05, max_time=120.0, path_updates=None):
     """
@@ -39,7 +41,7 @@ def simulate(tracker, x, y, yaw, dt=0.05, max_time=120.0, path_updates=None):
             break
         x += v * math.cos(yaw) * dt
         y += v * math.sin(yaw) * dt
-        yaw = math.atan2(math.sin(yaw + omega * dt), math.cos(yaw + omega * dt))
+        yaw = wrap_angle(yaw + omega * dt)
         t += dt
     return {key: np.array(values) for key, values in
             zip(('t', 'x', 'y', 'yaw', 'v', 'omega'), zip(*log))}

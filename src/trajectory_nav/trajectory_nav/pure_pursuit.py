@@ -21,19 +21,31 @@ import numpy as np
 
 from trajectory_nav.path_math import cumulative_arc_length, wrap_angle
 
+# Default tuning; the controller node declares its ROS parameters from this.
+DEFAULT_TUNING = {
+    'lookahead_distance': 0.5,
+    'velocity': 0.3,
+    'max_angular_velocity': 1.0,
+    'goal_tolerance': 0.2,
+    'slowdown_distance': 0.5,
+    'min_velocity': 0.05,
+}
+
 
 class PurePursuit:
     """Pure-pursuit tracker that remembers its progress along the path between control steps."""
 
-    def __init__(self, lookahead_distance=0.5, velocity=0.3, max_angular_velocity=1.0,
-                 goal_tolerance=0.2, slowdown_distance=0.5, min_velocity=0.05):
-        """Store the tuning; see `configure` for what each value means."""
+    def __init__(self, **tuning):
+        """Store the tuning (any of DEFAULT_TUNING's keys); see `configure` for their meaning."""
+        unknown = set(tuning) - set(DEFAULT_TUNING)
+        if unknown:
+            raise TypeError(f'unknown tuning: {sorted(unknown)}')
         self.path = None
         self.arc_length = None
         self.progress_index = 0
+        self.progress_known = False
         self.done = False
-        self.configure(lookahead_distance, velocity, max_angular_velocity,
-                       goal_tolerance, slowdown_distance, min_velocity)
+        self.configure(**{**DEFAULT_TUNING, **tuning})
 
     def configure(self, lookahead_distance, velocity, max_angular_velocity,
                   goal_tolerance, slowdown_distance, min_velocity):
@@ -57,8 +69,8 @@ class PurePursuit:
             raise ValueError('goal_tolerance must be positive')
         if slowdown_distance < 0.0:
             raise ValueError('slowdown_distance must not be negative')
-        if not 0.0 <= min_velocity <= velocity:
-            raise ValueError('min_velocity must be between 0 and velocity')
+        if not 0.0 < min_velocity <= velocity:
+            raise ValueError('min_velocity must be greater than 0 and at most velocity')
         self.lookahead_distance = lookahead_distance
         self.velocity = velocity
         self.max_angular_velocity = max_angular_velocity
@@ -71,7 +83,9 @@ class PurePursuit:
         Load a path to track; return True if it differs from the current one.
 
         Progress only resets when the path really changes, so a repeated message
-        cannot send the robot back towards the start.
+        cannot send the robot back towards the start. For a new path, the first
+        `update_progress` searches the whole path, so a path received mid-route
+        (for example after a controller restart) is picked up where the robot is.
         """
         new_path = np.column_stack([np.asarray(x, dtype=float), np.asarray(y, dtype=float)])
         if len(new_path) == 0:
@@ -82,6 +96,7 @@ class PurePursuit:
         self.path = new_path
         self.arc_length = cumulative_arc_length(new_path[:, 0], new_path[:, 1])
         self.progress_index = 0
+        self.progress_known = False
         self.done = False
         return True
 
@@ -93,7 +108,12 @@ class PurePursuit:
         passes close to itself cannot make progress jump ahead. If the nearest point
         is at the window's far edge, the robot is further along, so the window slides on.
         """
-        window = max(1.0, 3.0 * self.lookahead_distance)
+        if not self.progress_known:
+            distances = np.hypot(self.path[:, 0] - x, self.path[:, 1] - y)
+            self.progress_index = int(np.argmin(distances))
+            self.progress_known = True
+            return self.progress_index
+        window = self.search_window()
         while True:
             start = self.progress_index
             end = int(np.searchsorted(self.arc_length, self.arc_length[start] + window,
@@ -103,14 +123,29 @@ class PurePursuit:
             if self.progress_index != end - 1 or end >= len(self.path) or end - 1 == start:
                 return self.progress_index
 
+    def search_window(self):
+        """Return how far along the path (m) the progress and lookahead searches look at a time."""
+        return max(1.0, 3.0 * self.lookahead_distance)
+
     def lookahead_index(self, x, y):
-        """Return the first point at least the lookahead away, scanning forward; else the last."""
-        distances = np.hypot(self.path[self.progress_index:, 0] - x,
-                             self.path[self.progress_index:, 1] - y)
-        beyond = np.nonzero(distances >= self.lookahead_distance)[0]
-        if len(beyond) == 0:
-            return len(self.path) - 1
-        return self.progress_index + int(beyond[0])
+        """
+        Return the first point at least the lookahead away, scanning forward; else the last.
+
+        The scan goes one window at a time, so a long path costs no more per control
+        step than a short one.
+        """
+        start = self.progress_index
+        window = self.search_window()
+        while start < len(self.path):
+            end = int(np.searchsorted(self.arc_length, self.arc_length[start] + window,
+                                      side='right'))
+            end = max(end, start + 1)
+            distances = np.hypot(self.path[start:end, 0] - x, self.path[start:end, 1] - y)
+            beyond = np.nonzero(distances >= self.lookahead_distance)[0]
+            if len(beyond):
+                return start + int(beyond[0])
+            start = end
+        return len(self.path) - 1
 
     def distance_to_goal(self, x, y):
         """Return the straight-line distance from the robot to the final path point."""
@@ -140,9 +175,12 @@ class PurePursuit:
         Steers along the arc through the lookahead point (omega = 2 v sin(alpha) / Ld,
         with Ld the real distance to that point), slows down near the goal, keeps the
         arc's curvature when the turn rate is clamped, turns in place when the target
-        is behind, and latches `done` once within the goal tolerance.
+        is behind, latches `done` once within the goal tolerance, and stops for a
+        non-finite pose (for example NaN odometry).
         """
         if self.path is None or self.done:
+            return 0.0, 0.0
+        if not all(math.isfinite(value) for value in (x, y, yaw)):
             return 0.0, 0.0
         goal_distance = self.distance_to_goal(x, y)
         if goal_distance < self.goal_tolerance:

@@ -8,13 +8,12 @@ All nodes read [`config/trajectory_nav.yaml`](../src/trajectory_nav/config/traje
 |---|---|---|---|
 | `frame_id` | `odom` | loader, smoother, generator | Frame of the published paths |
 | `velocity` | 0.3 m/s | generator, controller | Cruise speed: trajectory timing and controller speed |
-| `goal_tolerance` | 0.2 m | loader, controller | Goal reached within this distance of the last point |
 
 ## waypoint_loader
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `num_waypoints` | 6 | Waypoints per set, including the first one at the robot (≥ 3) |
+| `num_waypoints` | 6 | Waypoints per set, including the first one at the robot (at least 3) |
 | `step_min` | 1.0 m | Minimum forward spacing between waypoints |
 | `step_max` | 2.0 m | Maximum forward spacing between waypoints |
 | `lateral_range` | 2.0 m | Maximum sideways offset from the robot's heading |
@@ -37,16 +36,16 @@ All nodes read [`config/trajectory_nav.yaml`](../src/trajectory_nav/config/traje
 | Parameter | Default | Runtime | Meaning |
 |---|---|---|---|
 | `lookahead_distance` | 0.5 m | yes | Steer towards the path point this far ahead |
+| `goal_tolerance` | 0.2 m | yes | Goal reached within this distance of the last point; the controller stops and announces the goal on `/goal_reached` |
 | `max_angular_velocity` | 1.0 rad/s | yes | Turn-rate limit; speed is reduced with it so the robot keeps the same arc |
 | `slowdown_distance` | 0.5 m | yes | Start ramping speed down this far from the goal; 0 disables the ramp |
-| `min_velocity` | 0.05 m/s | yes | Speed when arriving at `goal_tolerance` |
+| `min_velocity` | 0.05 m/s | yes | Speed when arriving at `goal_tolerance`; must be greater than 0 so the robot can reach the goal |
 | `velocity` | 0.3 m/s | yes | Cruise speed (shared) |
-| `goal_tolerance` | 0.2 m | yes | Stop distance (shared) |
 | `odom_timeout` | 0.5 s | no | Stop if odometry is older than this |
 | `control_frequency` | 20 Hz | no | Control loop rate |
 | `stamped_cmd_vel` | true | no | `TwistStamped` on `/cmd_vel`; false for `Twist`. Set by the launch argument of the same name |
 
-Parameters marked **Runtime** can be changed while the controller runs. Invalid values are rejected and the old ones are kept:
+Parameters marked **Runtime** can be changed while the controller runs. Invalid values are rejected and the old ones are kept. Every other parameter, in every node, is read once at startup and is **read-only**: `ros2 param set` on it fails instead of appearing to work.
 
 ```bash
 ros2 param set /pure_pursuit_controller lookahead_distance 0.7
@@ -55,7 +54,7 @@ ros2 param set /pure_pursuit_controller lookahead_distance 0.0  # rejected: must
 
 Changing `velocity` at runtime affects only the controller. The trajectory timestamps keep using the speed the generator started with.
 
-These limits are enforced: lookahead, velocity, turn rate and goal tolerance must be positive, `slowdown_distance` must not be negative, and `min_velocity` must be between 0 and `velocity`.
+These limits are enforced: lookahead, velocity, turn rate and goal tolerance must be positive, `slowdown_distance` must not be negative, and `min_velocity` must be greater than 0 and at most `velocity`. At startup, `num_waypoints` must be at least 3 (the spline smoother needs three points), `0 < step_min <= step_max`, and `lateral_range`, `resolution`, `sampling_distance`, `odom_timeout` and `control_frequency` must be valid, or the node exits with an error.
 
 ## Launch arguments
 

@@ -136,3 +136,9 @@ def test_wrap_angle():
     """Angles wrap into [-pi, pi]."""
     assert wrap_angle(3 * math.pi / 2) == pytest.approx(-math.pi / 2)
     assert wrap_angle(-3 * math.pi / 2) == pytest.approx(math.pi / 2)
+
+
+def test_waypoints_need_three_points():
+    """Fewer than three waypoints cannot be smoothed, so they are rejected up front."""
+    with pytest.raises(ValueError):
+        generate_waypoints(0, 0, 0, count=2)

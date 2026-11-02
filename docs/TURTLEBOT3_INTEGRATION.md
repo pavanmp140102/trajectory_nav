@@ -76,7 +76,7 @@ Before letting it drive on its own:
 
 Any differential-drive base works if it:
 
-1. publishes `nav_msgs/Odometry` on `/odom` (or you remap it), in the frame given by `frame_id`;
+1. publishes `nav_msgs/Odometry` on `/odom` (or you remap it), in the frame given by `frame_id`. Reliable and best-effort publishers both work;
 2. accepts `TwistStamped` on `/cmd_vel` (or use `stamped_cmd_vel:=false` for `Twist`).
 
 To remap topics, add `remappings` to the nodes in your own launch file, for example `('/odom', '/my_robot/odom')`.

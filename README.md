@@ -16,13 +16,14 @@ flowchart LR
     TG -- "/trajectory" --> PP[pure_pursuit_controller]
     odom --> PP
     PP -- "/cmd_vel" --> robot(["robot base"])
+    PP -. "/goal_reached" .-> WL
     WL -. "/raw_path" .-> TV[trajectory_visualizer]
     SS -. "/smoothed_path" .-> TV
     TG -. "/trajectory" .-> TV
     TV -- "/trajectory_markers" --> rviz(["RViz"])
 ```
 
-1. **`waypoint_loader`** makes six random waypoints ahead of the robot, starting at its current pose. When the robot reaches the last one, it makes a new set.
+1. **`waypoint_loader`** makes six random waypoints ahead of the robot, starting at its current pose. When the controller reports that the robot reached the last one, it makes a new set.
 2. **`spline_smoother`** fits a natural cubic spline through the waypoints, using arc length as the parameter, and samples it every 5 cm.
 3. **`trajectory_generator`** resamples that curve at exactly `sampling_distance` steps and stamps each pose with the time the robot should get there at constant speed.
 4. **`pure_pursuit_controller`** steers towards a point 0.5 m ahead on the trajectory and publishes velocity commands. It slows down for the goal and stops within 0.2 m of it.
@@ -40,6 +41,9 @@ cd ~/ros2_ws/src
 git clone git@github.com:pavanmp140102/trajectory_nav.git
 cd ~/ros2_ws
 rosdep install --from-paths src --ignore-src -y
+# on a robot with no display, skip the demo-only packages:
+#   rosdep install --from-paths src --ignore-src -y \
+#     --skip-keys "rviz2 turtlebot3_fake_node turtlebot3_description xacro robot_state_publisher"
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -78,11 +82,12 @@ In a kinematic simulation of the example path, the robot stays within 6 cm of th
 
 | Topic | Type | Direction | QoS |
 |---|---|---|---|
-| `/odom` | `nav_msgs/Odometry` | in | default |
+| `/odom` | `nav_msgs/Odometry` | in | sensor data (best effort); also accepts reliable publishers |
 | `/raw_path` | `nav_msgs/Path` | waypoint_loader → | reliable, transient local, depth 1 |
 | `/smoothed_path` | `nav_msgs/Path` | spline_smoother → | reliable, transient local, depth 1 |
 | `/trajectory` | `nav_msgs/Path` | trajectory_generator → | reliable, transient local, depth 1 |
 | `/cmd_vel` | `geometry_msgs/TwistStamped` (or `Twist`) | → robot | default |
+| `/goal_reached` | `std_msgs/Empty` | controller → waypoint_loader | reliable, volatile, depth 1 |
 | `/trajectory_markers` | `visualization_msgs/MarkerArray` | → RViz | reliable, transient local, depth 1 |
 
 Each pose on `/trajectory` has its own `header.stamp`: the time the robot is planned to reach it. Details are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -114,7 +119,7 @@ The full list is in [docs/PARAMETERS.md](docs/PARAMETERS.md).
 | [ALGORITHMS.md](docs/ALGORITHMS.md) | Spline smoothing, resampling, timing and pure pursuit, with figures |
 | [PARAMETERS.md](docs/PARAMETERS.md) | Every parameter and launch argument, and tuning advice |
 | [TURTLEBOT3_INTEGRATION.md](docs/TURTLEBOT3_INTEGRATION.md) | Fake node, Gazebo and real robot |
-| [TESTING.md](docs/TESTING.md) | Tests and how to regenerate the figures and screenshots |
+| [TESTING.md](docs/TESTING.md) | The test suite and the manual end-to-end check |
 | [CHANGELOG.rst](src/trajectory_nav/CHANGELOG.rst) | What changed in each release |
 
 ## Repository layout

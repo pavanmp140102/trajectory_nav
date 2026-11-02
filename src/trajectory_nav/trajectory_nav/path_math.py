@@ -29,8 +29,8 @@ def generate_waypoints(start_x, start_y, start_yaw, count=6, step_range=(1.0, 2.
     Anchoring the first waypoint to the robot means every new path begins where the
     robot already is, so the controller never has to drive back to the odom origin.
     """
-    if count < 2:
-        raise ValueError('count must be at least 2')
+    if count < 3:
+        raise ValueError('count must be at least 3, the minimum the spline smoother needs')
     if rng is None:
         rng = np.random.default_rng()
     cos_yaw, sin_yaw = math.cos(start_yaw), math.sin(start_yaw)

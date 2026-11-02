@@ -15,9 +15,12 @@
 
 """Helpers shared by the nodes: path message conversion, latched QoS and the node entry point."""
 
+import signal
+
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 import numpy as np
+from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
@@ -36,6 +39,27 @@ def latched_qos():
     """
     return QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                       reliability=ReliabilityPolicy.RELIABLE)
+
+
+def event_qos():
+    """
+    Return the QoS for /goal_reached: reliable, but not kept for late subscribers.
+
+    An old "goal reached" must not make a restarted waypoint loader skip a path.
+    """
+    return QoSProfile(depth=1, durability=DurabilityPolicy.VOLATILE,
+                      reliability=ReliabilityPolicy.RELIABLE)
+
+
+def declare_read_only(node, name, default):
+    """
+    Declare a parameter that is only read at startup and return its value.
+
+    Marking it read-only makes `ros2 param set` fail instead of appearing to work.
+    """
+    return node.declare_parameter(
+        name, default, ParameterDescriptor(read_only=True, description='set at startup only')
+    ).value
 
 
 def path_to_xy(msg):
@@ -79,7 +103,9 @@ def run_node(node_class, args=None, on_shutdown=None):
     `on_shutdown(node)` runs; the controller uses this to send a final stop command.
     Spinning with a short timeout lets Python handle Ctrl-C promptly even when no
     message or timer wakes the executor (for example, sim time with no /clock yet).
+    SIGTERM (kill, systemd, docker stop) is handled the same way as Ctrl-C.
     """
+    signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = node_class()
     executor = SingleThreadedExecutor()
@@ -90,7 +116,16 @@ def run_node(node_class, args=None, on_shutdown=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # A repeated signal (a process-group Ctrl-C plus the launch forward) must not
+        # interrupt the shutdown that is already under way.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if on_shutdown is not None and rclpy.ok():
             on_shutdown(node)
         node.destroy_node()
         rclpy.try_shutdown()
+
+
+def _raise_keyboard_interrupt(signum, frame):
+    """Turn SIGTERM into KeyboardInterrupt so run_node shuts down cleanly."""
+    raise KeyboardInterrupt

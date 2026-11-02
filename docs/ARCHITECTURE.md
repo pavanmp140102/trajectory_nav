@@ -12,6 +12,7 @@ flowchart LR
     TG -- "/trajectory<br/>sampling_distance spacing, timed" --> PP[pure_pursuit_controller]
     odom --> PP
     PP -- "/cmd_vel<br/>TwistStamped" --> base(["robot base"])
+    PP -. "/goal_reached" .-> WL
     WL -.-> TV[trajectory_visualizer]
     SS -.-> TV
     TG -.-> TV
@@ -31,10 +32,10 @@ The maths sits in modules that don't import ROS (`path_math.py`, `pure_pursuit.p
 
 ### waypoint_loader
 
-- **Subscribes:** `/odom`
+- **Subscribes:** `/odom`, `/goal_reached`
 - **Publishes:** `/raw_path`
 
-It waits for the first odometry message, then publishes `num_waypoints` waypoints. The first waypoint is the robot's position. Each later one is 1–2 m further along the robot's heading, with a random sideways offset of up to ±2 m. When the robot comes within `goal_tolerance` of the last waypoint, a new set is made from the robot's current pose. Set `seed` to repeat the same sequence of paths.
+It waits for the first odometry message, then publishes `num_waypoints` waypoints. The first waypoint is the robot's position. Each later one is 1–2 m further along the robot's heading, with a random sideways offset of up to ±2 m. When the controller announces on `/goal_reached` that the robot has arrived, a new set is made from the robot's current pose. Set `seed` to repeat the same sequence of paths.
 
 ### spline_smoother
 
@@ -53,19 +54,19 @@ It resamples the smoothed path at exact `sampling_distance` steps along its leng
 ### pure_pursuit_controller
 
 - **Subscribes:** `/trajectory`, `/odom`
-- **Publishes:** `/cmd_vel`
+- **Publishes:** `/cmd_vel`, `/goal_reached`
 
 It runs at `control_frequency` (20 Hz) and works through these cases in order:
 
 | Condition | Command |
 |---|---|
 | No trajectory or no odometry yet | nothing published |
-| Odometry older than `odom_timeout` | one zero command, then a throttled warning |
-| Within `goal_tolerance` of the last point | one zero command; done until a new trajectory arrives |
+| Odometry older than `odom_timeout`, or not finite (NaN, infinity) | one zero command, then a throttled warning |
+| Within `goal_tolerance` of the last point | one zero command and one `/goal_reached` message; done until a new trajectory arrives |
 | Lookahead point more than 90° off the heading | turn in place |
 | Otherwise | pure pursuit, see [ALGORITHMS.md](ALGORITHMS.md#4-pure-pursuit) |
 
-A trajectory identical to the current one is ignored, so progress along the path is kept. On Ctrl-C the controller publishes a final zero command before it exits.
+A trajectory identical to the current one is ignored, so progress along the path is kept. On Ctrl-C or SIGTERM the controller publishes a final zero command and waits up to 0.5 s for it to be delivered before it exits. A trajectory that arrives while the robot is already partway along it (for example after a controller restart) is picked up at the robot's nearest point, not at the start.
 
 ### trajectory_visualizer
 
@@ -97,6 +98,8 @@ Each path is published **once**, when it changes. Transient-local durability mea
 ros2 topic echo /trajectory --qos-durability transient_local --qos-reliability reliable --once
 ```
 
+A publisher that feeds one of these topics from outside, for example an external planner writing to `/raw_path` or `/trajectory`, must use the same durability. A volatile publisher (the default `create_publisher(Path, topic, 10)`) is QoS-incompatible with the transient-local subscribers here, and its messages are silently not delivered. Publish with `QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)`.
+
 All three paths share these conventions:
 
 - `header.frame_id` comes from the `frame_id` parameter (`odom` by default).
@@ -126,9 +129,9 @@ sequenceDiagram
     participant SS as spline_smoother
     participant TG as trajectory_generator
     participant PP as pure_pursuit_controller
-    O->>WL: robot within goal_tolerance of last waypoint
-    O->>PP: same pose
+    O->>PP: robot within goal_tolerance of the last point
     PP->>PP: done, publish one zero command
+    PP->>WL: /goal_reached
     WL->>SS: /raw_path (new set, first point = robot pose)
     SS->>TG: /smoothed_path
     TG->>PP: /trajectory
@@ -136,7 +139,7 @@ sequenceDiagram
     PP-->>O: robot drives on
 ```
 
-Both nodes use the same `goal_tolerance`, so the controller stops and the loader makes new waypoints on the same odometry message. In the demo the new trajectory reaches the controller about 60 ms later. Because the new path starts at the robot, the robot carries straight on.
+The controller is the only node that decides when the goal is reached. It announces this once on `/goal_reached` (`std_msgs/Empty`, reliable, volatile), and the loader makes the next set in response. That way the two nodes can never disagree about the goal, whatever `goal_tolerance` is set to. The topic is volatile on purpose: an old announcement must not make a restarted loader skip a path. In the demo the new trajectory reaches the controller about 60 ms after the goal is announced. Because the new path starts at the robot, the robot carries straight on.
 
 ![After reaching the first goal, the second path begins at the end of the robot's trail](images/rviz_second_path.png)
 

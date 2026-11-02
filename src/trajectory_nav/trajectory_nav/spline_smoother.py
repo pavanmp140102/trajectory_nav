@@ -19,7 +19,8 @@ from nav_msgs.msg import Path
 from rclpy.node import Node
 
 from trajectory_nav.path_math import smooth_path
-from trajectory_nav.ros_utils import latched_qos, make_path, path_to_xy, run_node
+from trajectory_nav.ros_utils import declare_read_only, latched_qos, make_path, path_to_xy, \
+    run_node
 
 
 class SplineSmoother(Node):
@@ -28,8 +29,10 @@ class SplineSmoother(Node):
     def __init__(self):
         """Declare parameters and connect /raw_path to the latched /smoothed_path."""
         super().__init__('spline_smoother')
-        self.frame_id = self.declare_parameter('frame_id', 'odom').value
-        self.resolution = self.declare_parameter('resolution', 0.05).value
+        self.frame_id = declare_read_only(self, 'frame_id', 'odom')
+        self.resolution = declare_read_only(self, 'resolution', 0.05)
+        if self.resolution <= 0.0:
+            raise ValueError('resolution must be positive')
         self.publisher = self.create_publisher(Path, '/smoothed_path', latched_qos())
         self.create_subscription(Path, '/raw_path', self.path_callback, latched_qos())
         self.get_logger().info(f'Spline smoother started (resolution={self.resolution} m)')

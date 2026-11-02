@@ -19,7 +19,8 @@ from nav_msgs.msg import Path
 from rclpy.node import Node
 
 from trajectory_nav.path_math import assign_times, resample_path
-from trajectory_nav.ros_utils import latched_qos, make_path, path_to_xy, run_node
+from trajectory_nav.ros_utils import declare_read_only, latched_qos, make_path, path_to_xy, \
+    run_node
 
 
 class TrajectoryGenerator(Node):
@@ -28,9 +29,10 @@ class TrajectoryGenerator(Node):
     def __init__(self):
         """Declare parameters and connect /smoothed_path to the latched /trajectory."""
         super().__init__('trajectory_generator')
-        self.frame_id = self.declare_parameter('frame_id', 'odom').value
-        self.sampling_distance = self.declare_parameter('sampling_distance', 0.05).value
-        self.velocity = self.declare_parameter('velocity', 0.3).value
+        self.frame_id = declare_read_only(self, 'frame_id', 'odom')
+        self.sampling_distance = declare_read_only(self, 'sampling_distance', 0.05)
+        self.velocity = declare_read_only(self, 'velocity', 0.3)
+        # Checked here too so a bad value stops the node at startup, not at the first path.
         if self.sampling_distance <= 0.0 or self.velocity <= 0.0:
             raise ValueError('sampling_distance and velocity must be positive')
         self.publisher = self.create_publisher(Path, '/trajectory', latched_qos())

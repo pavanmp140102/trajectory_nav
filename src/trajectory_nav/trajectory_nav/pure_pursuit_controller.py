@@ -15,18 +15,20 @@
 
 """Pure-pursuit controller node: tracks /trajectory using /odom and publishes /cmd_vel."""
 
+import math
+
 from geometry_msgs.msg import Twist, TwistStamped
 from nav_msgs.msg import Odometry, Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from std_msgs.msg import Empty
 
 from trajectory_nav.path_math import yaw_from_quaternion
-from trajectory_nav.pure_pursuit import PurePursuit
-from trajectory_nav.ros_utils import latched_qos, path_to_xy, run_node
-
-TUNING_PARAMETERS = ('lookahead_distance', 'velocity', 'max_angular_velocity',
-                     'goal_tolerance', 'slowdown_distance', 'min_velocity')
+from trajectory_nav.pure_pursuit import DEFAULT_TUNING, PurePursuit
+from trajectory_nav.ros_utils import declare_read_only, event_qos, latched_qos, path_to_xy, \
+    run_node
 
 
 class PurePursuitController(Node):
@@ -35,18 +37,16 @@ class PurePursuitController(Node):
     def __init__(self):
         """Declare parameters, build the tracker and start the fixed-rate control loop."""
         super().__init__('pure_pursuit_controller')
-        self.declare_parameter('lookahead_distance', 0.5)
-        self.declare_parameter('velocity', 0.3)
-        self.declare_parameter('max_angular_velocity', 1.0)
-        self.declare_parameter('goal_tolerance', 0.2)
-        self.declare_parameter('slowdown_distance', 0.5)
-        self.declare_parameter('min_velocity', 0.05)
-        self.odom_timeout = self.declare_parameter('odom_timeout', 0.5).value
-        control_frequency = self.declare_parameter('control_frequency', 20.0).value
-        self.stamped_cmd_vel = self.declare_parameter('stamped_cmd_vel', True).value
+        for name, default in DEFAULT_TUNING.items():
+            self.declare_parameter(name, default)
+        self.odom_timeout = declare_read_only(self, 'odom_timeout', 0.5)
+        control_frequency = declare_read_only(self, 'control_frequency', 20.0)
+        self.stamped_cmd_vel = declare_read_only(self, 'stamped_cmd_vel', True)
+        if self.odom_timeout <= 0.0 or control_frequency <= 0.0:
+            raise ValueError('odom_timeout and control_frequency must be positive')
 
         self.tracker = PurePursuit(**{name: self.get_parameter(name).value
-                                      for name in TUNING_PARAMETERS})
+                                      for name in DEFAULT_TUNING})
         self.add_on_set_parameters_callback(self.on_parameters_set)
 
         self.robot_pose = None
@@ -54,17 +54,18 @@ class PurePursuitController(Node):
         self.stopped = True
 
         self.create_subscription(Path, '/trajectory', self.trajectory_callback, latched_qos())
-        self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        self.create_subscription(Odometry, '/odom', self.odom_callback, qos_profile_sensor_data)
         self.cmd_vel_publisher = self.create_publisher(
             TwistStamped if self.stamped_cmd_vel else Twist, '/cmd_vel', 10)
+        self.goal_publisher = self.create_publisher(Empty, '/goal_reached', event_qos())
         self.create_timer(1.0 / control_frequency, self.control_loop)
         self.get_logger().info(
             'Pure pursuit controller started (' + ', '.join(
-                f'{name}={getattr(self.tracker, name)}' for name in TUNING_PARAMETERS) + ')')
+                f'{name}={getattr(self.tracker, name)}' for name in DEFAULT_TUNING) + ')')
 
     def on_parameters_set(self, parameters):
         """Apply tuning changes made with `ros2 param set` at runtime, rejecting invalid values."""
-        values = {name: getattr(self.tracker, name) for name in TUNING_PARAMETERS}
+        values = {name: getattr(self.tracker, name) for name in DEFAULT_TUNING}
         for parameter in parameters:
             if parameter.name in values:
                 values[parameter.name] = parameter.value
@@ -89,7 +90,12 @@ class PurePursuitController(Node):
         self.odom_time = self.get_clock().now()
 
     def control_loop(self):
-        """Compute and publish the velocity command; stop when done or when odometry is stale."""
+        """
+        Compute and publish the velocity command; stop when done or odometry is stale or invalid.
+
+        On reaching the goal, an Empty message on /goal_reached tells the waypoint
+        loader to make the next set of waypoints.
+        """
         if self.tracker.path is None or self.robot_pose is None:
             return
         age = self.get_clock().now() - self.odom_time
@@ -98,13 +104,19 @@ class PurePursuitController(Node):
             self.stop()
             return
 
-        was_done = self.tracker.done
         position, q = self.robot_pose.position, self.robot_pose.orientation
-        linear, angular = self.tracker.compute(
-            position.x, position.y, yaw_from_quaternion(q.x, q.y, q.z, q.w))
+        pose = (position.x, position.y, yaw_from_quaternion(q.x, q.y, q.z, q.w))
+        if not all(math.isfinite(value) for value in pose):
+            self.get_logger().warn('Odometry is not finite, stopping', throttle_duration_sec=2.0)
+            self.stop()
+            return
+
+        was_done = self.tracker.done
+        linear, angular = self.tracker.compute(*pose)
         if self.tracker.done:
             if not was_done:
                 self.get_logger().info('Trajectory complete')
+                self.goal_publisher.publish(Empty())
             self.stop()
             return
         self.publish_cmd_vel(linear, angular)
@@ -129,10 +141,15 @@ class PurePursuitController(Node):
         else:
             self.cmd_vel_publisher.publish(twist)
 
+    def send_final_stop(self):
+        """Publish a zero command and wait briefly for it to be delivered before shutdown."""
+        self.publish_cmd_vel(0.0, 0.0)
+        self.cmd_vel_publisher.wait_for_all_acked(Duration(seconds=0.5))
+
 
 def main(args=None):
     """Run the controller, sending a final stop command on shutdown."""
-    run_node(PurePursuitController, args, on_shutdown=lambda node: node.publish_cmd_vel(0.0, 0.0))
+    run_node(PurePursuitController, args, on_shutdown=PurePursuitController.send_final_stop)
 
 
 if __name__ == '__main__':

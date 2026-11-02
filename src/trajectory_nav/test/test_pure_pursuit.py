@@ -141,7 +141,8 @@ def test_stops_and_latches_at_goal():
 
 @pytest.mark.parametrize('name, value', [
     ('lookahead_distance', 0.0), ('velocity', -1.0), ('max_angular_velocity', 0.0),
-    ('goal_tolerance', 0.0), ('slowdown_distance', -0.1), ('min_velocity', 1.0)])
+    ('goal_tolerance', 0.0), ('slowdown_distance', -0.1), ('min_velocity', 1.0),
+    ('min_velocity', 0.0)])
 def test_rejects_invalid_tuning(name, value):
     """Invalid parameters raise instead of silently producing zero commands."""
     with pytest.raises(ValueError):
@@ -171,3 +172,56 @@ def test_closed_loop_with_repeated_path_messages():
     log = simulate(tracker, 0.0, 0.0, 0.0, path_updates=lambda t: t.set_path(x, y))
     assert tracker.done
     assert log['t'][-1] < 1.5 * (len(x) * 0.05) / tracker.velocity + 10.0
+
+
+def test_path_received_mid_route_starts_at_robot():
+    """A path that arrives while the robot is partway along it is picked up at the robot."""
+    rng = np.random.default_rng(SEED)
+    for _ in range(30):
+        x, y = pipeline_path(generate_waypoints(0.0, 0.0, 0.0, rng=rng))
+        for index in range(0, len(x), 15):
+            tracker = PurePursuit()
+            tracker.set_path(x, y)
+            progress = tracker.update_progress(x[index], y[index])
+            assert abs(tracker.arc_length[progress] - tracker.arc_length[index]) < 0.05
+
+
+def test_mid_route_path_drives_forward_to_goal():
+    """Started mid-path with a fresh tracker, the robot finishes without going back."""
+    rng = np.random.default_rng(SEED)
+    x, y = pipeline_path(generate_waypoints(0.0, 0.0, 0.0, rng=rng))
+    start = len(x) // 2
+    heading = math.atan2(y[start + 1] - y[start], x[start + 1] - x[start])
+    tracker = PurePursuit()
+    tracker.set_path(x, y)
+    log = simulate(tracker, x[start], y[start], heading)
+    travelled = np.sum(np.hypot(np.diff(log['x']), np.diff(log['y'])))
+    remaining = tracker.arc_length[-1] - tracker.arc_length[start]
+    assert tracker.done
+    assert travelled < remaining
+
+
+def test_non_finite_pose_stops():
+    """Odometry with NaN or infinity gives a stop command, not a NaN command."""
+    tracker = PurePursuit()
+    tracker.set_path(*straight_path())
+    assert tracker.compute(float('nan'), 0.0, 0.0) == (0.0, 0.0)
+    assert tracker.compute(1.0, 0.0, float('inf')) == (0.0, 0.0)
+    assert not tracker.done
+
+
+def test_lookahead_on_long_path():
+    """The windowed lookahead scan finds the same point as a full scan on a long path."""
+    x, y = straight_path(length=50.0, spacing=0.01)
+    tracker = PurePursuit(lookahead_distance=0.5)
+    tracker.set_path(x, y)
+    tracker.update_progress(20.0, 0.3)
+    distances = np.hypot(x[tracker.progress_index:] - 20.0, y[tracker.progress_index:] - 0.3)
+    expected = tracker.progress_index + int(np.nonzero(distances >= 0.5)[0][0])
+    assert tracker.lookahead_index(20.0, 0.3) == expected
+
+
+def test_rejects_unknown_tuning():
+    """A misspelt tuning name is an error, not silently ignored."""
+    with pytest.raises(TypeError):
+        PurePursuit(look_ahead=0.5)

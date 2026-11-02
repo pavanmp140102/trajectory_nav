@@ -5,7 +5,6 @@
   ros__parameters:
     frame_id: odom            # frame of the paths and trajectory
     velocity: 0.3             # cruise speed (m/s): trajectory timing and controller
-    goal_tolerance: 0.2       # goal reached when this close to the last point (m)
 
 waypoint_loader:
   ros__parameters:
@@ -26,6 +25,7 @@ trajectory_generator:
 pure_pursuit_controller:
   ros__parameters:
     lookahead_distance: 0.5   # steer towards the path point this far ahead (m)
+    goal_tolerance: 0.2       # goal reached when this close to the last point (m)
     max_angular_velocity: 1.0 # turn-rate limit (rad/s)
     slowdown_distance: 0.5    # ramp down to min_velocity over this distance to the goal (m)
     min_velocity: 0.05        # speed on arrival at goal_tolerance (m/s)

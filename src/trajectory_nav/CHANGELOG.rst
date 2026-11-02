@@ -35,9 +35,27 @@ Fixed
 * **The steering law divided by the configured lookahead** even when the target was the
   closer final point. It now uses the real distance.
 * **Unused imports** (``Twist``, ``PoseStamped``, ``JointTrajectory``, ``Clock``, ...).
+* **The goal check lived in two nodes.** The loader and the controller each compared the
+  robot to the goal with their own copy of ``goal_tolerance``, so changing it on one of them
+  could leave the robot parked forever. Only the controller decides now, and it tells the
+  loader on ``/goal_reached``.
+* **A path received mid-route** (for example by a restarted controller) was tracked from
+  the start of the path. The first update after a new path now searches the whole path for
+  the robot's nearest point.
+* **``min_velocity: 0`` stalled the robot** just short of the goal. It must be greater than 0.
+* **NaN odometry** produced a command with a NaN turn rate. The robot now stops.
+* **The final stop could be lost.** The controller waits up to 0.5 s for the zero command to
+  be delivered, and SIGTERM (``kill``, ``docker stop``) is handled like Ctrl-C.
+* **Parameters that cannot change at runtime looked as if they could.** They are now
+  read-only, so ``ros2 param set`` on them fails.
+* **``num_waypoints`` below 3** stalled the pipeline or crashed the loader. It is checked at
+  startup.
+* ``/odom`` is subscribed with sensor-data QoS, so best-effort odometry publishers work.
+* The lookahead scan looks one window at a time instead of at every remaining path point.
 
 Added
 ~~~~~
+* ``/goal_reached`` (``std_msgs/Empty``): sent once by the controller when it reaches the goal.
 * Slow-down near the goal: speed ramps to ``min_velocity`` at the goal tolerance.
 * Turn-rate clamping that keeps the steering arc (speed is scaled down with it).
 * Turn in place when the lookahead point is behind the robot.
@@ -70,6 +88,10 @@ Breaking changes
 ~~~~~~~~~~~~~~~~
 * The path topics use reliable, **transient local**, depth 1 QoS. Subscribers that need
   the latest path when they start must request transient local durability.
+* A publisher that feeds ``/raw_path``, ``/smoothed_path`` or ``/trajectory`` from outside
+  must also use transient local durability; volatile publishers are not delivered.
+* ``goal_tolerance`` is now a controller parameter only; the loader no longer has one.
+* ``min_velocity`` must be greater than 0.
 * The three per-node config files are replaced by one ``config/trajectory_nav.yaml``.
 * Controller parameter ``linear_velocity`` is now the shared ``velocity``.
 * ``spline_smoother`` parameter ``enable_plot`` is removed.
